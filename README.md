@@ -75,3 +75,8 @@ My approach aims to solve the problem for any number of nodes. In my solution, I
 to store said objects (the descrirptor being the index into the table). This way, we may use the second approach by 
 performing the atomic operations using 64-bit descriptors. This approach, while scalable, is magnitudes slower than 'pointer compression' but will work for up 2^32 nodes. Furtermore, a more practical solution, involving the Chapel runtime, is planned to
 significantly improve performance. As such, this project is deemed a 'Work-In-Progress'.
+
+## Prerequisites
+
+`GlobalAtomicObject` requires `BigInteger` module and hence requires GMP to be built (hence you may need to rebuild
+Chapel with it if you do not already have it installed).
