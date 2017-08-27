@@ -1,8 +1,9 @@
 use RCU;
+use Random;
 use Time;
 
 class NonResizableArray {
-	var dom : {0..0};
+	var dom = {0..0};
 	var arr : [dom] int;
 }
 
@@ -11,39 +12,60 @@ class ResizableArray {
 	var rcu : RCU(NonResizableArray);
 		
 	proc ResizableArray() {
-		rcu.writeBarrier(lambda(arr : NonResizableArray) : NonResizableArray { return new NonResizableArray(); });
+		rcu.update(new NonResizableArray());
 	}
 
 	proc push(elt) {
 		var _top = top$;
 
-		// Attempt to push if we have enough space... note that while we are doing this
-		// operation, indexing operations are allowed to proceed.
+		// Attempt to push if we have enough space...
+		rcu.acquireReadBarrier();
 		var isFull : bool;
-		rcu.readBarrier(lambda(arr : NonResizableArray) {
-			if _top > arr.dom.high {
-				arr[_top] = elt;
-			} else {
-				isFull = true;
-			}
-		});
+		var arr = rcu.read();
+		if _top <= arr.dom.high {
+			arr.arr[_top] = elt;
+		} else {
+			isFull = true;
+		}
+		rcu.releaseReadBarrier();
 
 		// If we are full, we need to allocate more space. We must move all data from the old into the new.
-		rcu.writeBarrier(lambda(arr : NonResizableArray) : NonResizableArray {
-			var newArr = new NonResizableArray();
-			newArr.dom = {0..#(arr.dom.size * 2)};
-			newArr.arr[0..#arr.dom.size] = arr.arr[0..#arr.dom.size];
-			newArr.arr[_top] = elt;
-			return newArr;
-		});
+		// Note that the 'arr' could have changed since we relinquished reader status, so we must read it again...
+		if isFull {
+			rcu.acquireWriteBarrier();
+			arr = rcu.read();
+
+			// If someone else has resized it already and we have enough space, then we are good.
+			if _top <= arr.dom.high {
+				arr.arr[_top] = elt;
+			}
+			// Otherwise, we resize...
+			else {
+				var newArr = new NonResizableArray();
+				newArr.dom = {0..#(arr.dom.size * 2)};
+				newArr.arr[0..#arr.dom.size] = arr.arr[0..#arr.dom.size];
+				newArr.arr[_top] = elt;
+				rcu.update(newArr);
+				delete arr;
+			}
+
+			rcu.releaseWriteBarrier();
+		}
 
 		top$ = _top + 1;
 	}
 
-	proc write() {
-		rcu.readBarrier(lambda(arr : NonResizableArray) {
-			writeln(arr.arr);
-		});
+	// A simple test to ensure that all elements inserted are distinct and are below the maximum amount.
+	// We perform a reduction over the array; if the array is unsafely deleted or touched while resizing,
+	// then we will get undefined behavior and likely fail (or worse: crash...). 
+	proc test() {
+		rcu.acquireReadBarrier();
+
+		var arr = rcu.read();
+		var finalTotal = (1000 * 1001) / 2;
+		var total = + reduce arr.arr;
+		assert(total <= finalTotal);
+		rcu.releaseReadBarrier();
 	}
 }
 
@@ -53,15 +75,20 @@ var keepAlive : atomic bool;
 keepAlive.write(true);
 
 begin {
+	var randStream = makeRandomStream(real);
 	while keepAlive.read() {
-		arr.write();
-		sleep(2);
+		arr.test();
+
+		sleep(randStream.getNext(), TimeUnits.milliseconds);
 	}
 }
 
+var randStream = makeRandomStream(real);
 forall i in 1 .. 1000 {
 	arr.push(i);
-	sleep(1);
+	sleep(randStream.getNext(), TimeUnits.milliseconds);
 }
 
 keepAlive.write(false);
+
+writeln("SUCCESS!");

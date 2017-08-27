@@ -76,31 +76,35 @@ class RCUImpl {
       return chpl_getPrivatizedCopy(this.type, pid);
     }
 
-	proc readBarrier(f) {
+	proc acquireReadBarrier() {
 		readCount.add(1);
+	}
 
-		var val = descriptorTable.objs[descriptorTable.current.read()];
-		f(val);
-
+	proc releaseReadBarrier() {
 		readCount.sub(1);
 	}
 
-	proc writeBarrier(f) {
+	proc acquireWriteBarrier() {
 		writeLock.lock$ = true;
+	}
 
-		var val = descriptorTable.objs[descriptorTable.current.read()];
+	proc releaseWriteBarrier() {
+		writeLock.lock$;
+	}
+
+	// Read the current value
+	proc read() : eltType {
+		return descriptorTable.objs[descriptorTable.current.read()];
+	}
+
+	// Update with your Copy...
+	proc update(elt : eltType) {
 		var newCurrent = if descriptorTable.current.read() == 1 then 2 else 1;
-		var newVal = f(val);
-
 		coforall loc in Locales do on loc {
 			var localThis = getPrivatizedThis;
-			localThis.descriptorTable.objs[newCurrent] = newVal;
+			localThis.descriptorTable.objs[newCurrent] = elt;
 			localThis.descriptorTable.current.write(newCurrent);
 			localThis.readCount.waitFor(0);
 		}
-
-		delete val;
-
-		writeLock.lock$;
 	}
 }
