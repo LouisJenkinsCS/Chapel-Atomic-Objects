@@ -6,6 +6,11 @@ record RCU {
 		pid = (new RCUImpl(eltType, new RCUWriteLock())).pid;
 	}
 
+	proc ~RCU() {
+		delete _value.writeLock;
+		coforall loc in Locales do on loc do delete _value;
+	}
+
 	proc _value {
 		if pid == -1 {
 			halt("RCU is uninitialized...");
@@ -59,6 +64,10 @@ class RCUImpl {
 		this.writeLock = other.writeLock;
 		this.descriptorTable = new RCUDescriptorTable(eltType);
 		this.pid = other.pid;
+	}
+
+	proc ~RCUImpl() {
+		delete descriptorTable;
 	}
 
 	pragma "no doc"

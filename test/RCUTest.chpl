@@ -1,9 +1,11 @@
 use RCU;
+use CyclicDist;
 use Random;
 use Time;
 
 class NonResizableArray {
-	var dom = {0..0};
+	var space = {0..31};
+	var dom = space dmapped Cyclic(startIdx=0);
 	var arr : [dom] int;
 }
 
@@ -62,7 +64,7 @@ class ResizableArray {
 		rcu.acquireReadBarrier();
 
 		var arr = rcu.read();
-		var finalTotal = (1000 * 1001) / 2;
+		var finalTotal = ((numLocales * 100) * ((numLocales * 100) + 1)) / 2;
 		var total = + reduce arr.arr;
 		assert(total <= finalTotal);
 		rcu.releaseReadBarrier();
@@ -83,10 +85,12 @@ begin {
 	}
 }
 
-var randStream = makeRandomStream(real);
-forall i in 1 .. 1000 {
-	arr.push(i);
-	sleep(randStream.getNext(), TimeUnits.milliseconds);
+coforall loc in Locales do on loc {
+	var randStream = makeRandomStream(real);
+	forall i in ((here.id * 100) + 1) .. ((here.id + 1) * 100) {
+		arr.push(i);
+		sleep(randStream.getNext(), TimeUnits.milliseconds);
+	}
 }
 
 keepAlive.write(false);
