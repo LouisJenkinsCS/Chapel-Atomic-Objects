@@ -1,33 +1,67 @@
 use RCU;
 use Time;
 
-class C {
-	var x = 1;
+class NonResizableArray {
+	var dom : {0..0};
+	var arr : [dom] int;
 }
 
-var rcu : RCU(C);
+class ResizableArray {
+	var top$ : sync int = 0;
+	var rcu : RCU(NonResizableArray);
+		
+	proc ResizableArray() {
+		rcu.writeBarrier(lambda(arr : NonResizableArray) : NonResizableArray { return new NonResizableArray(); });
+	}
 
-begin {
-	while true {
-		rcu.readBarrier(lambda(c : C) {
-			if c == nil {
-				writeln("Read: (NULL)");
+	proc push(elt) {
+		var _top = top$;
+
+		// Attempt to push if we have enough space... note that while we are doing this
+		// operation, indexing operations are allowed to proceed.
+		var isFull : bool;
+		rcu.readBarrier(lambda(arr : NonResizableArray) {
+			if _top > arr.dom.high {
+				arr[_top] = elt;
+			} else {
+				isFull = true;
 			}
-
-			writeln("Read: ", c.x);
 		});
-		sleep(1);
+
+		// If we are full, we need to allocate more space. We must move all data from the old into the new.
+		rcu.writeBarrier(lambda(arr : NonResizableArray) : NonResizableArray {
+			var newArr = new NonResizableArray();
+			newArr.dom = {0..#(arr.dom.size * 2)};
+			newArr.arr[0..#arr.dom.size] = arr.arr[0..#arr.dom.size];
+			newArr.arr[_top] = elt;
+			return newArr;
+		});
+
+		top$ = _top + 1;
+	}
+
+	proc write() {
+		rcu.readBarrier(lambda(arr : NonResizableArray) {
+			writeln(arr.arr);
+		});
 	}
 }
 
-while true {
-	rcu.writeBarrier(lambda(c : C) : C { 
-		if c == nil {
-			return new C(0);
-		}
+var arr = new ResizableArray();
 
-		return new C(c.x + 1); 
-	});
-	sleep(2);
+var keepAlive : atomic bool;
+keepAlive.write(true);
+
+begin {
+	while keepAlive.read() {
+		arr.write();
+		sleep(2);
+	}
 }
 
+forall i in 1 .. 1000 {
+	arr.push(i);
+	sleep(1);
+}
+
+keepAlive.write(false);
