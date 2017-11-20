@@ -30,7 +30,7 @@ record DistVector {
 	}
 
 	proc ~DistVector() {
-		coforall loc in Locales do on loc do delete _value;
+		// coforall loc in Locales do on loc do delete _value;
 	}
 
 	proc _value {
@@ -57,7 +57,7 @@ class DistVectorImpl : CollectionImpl {
 	// will update the current index and await read counter to hit 0. By waiting for it to hit 0, we
 	// ensure that no other writer to will modify an instance another reader is using while alternating.
 	// Readers will write to the same already-existing containers in either container.
-	var instances : [1..2] ArrayWrapper(eltType);
+	var instances : [1..2] [1..64] DistVectorSlot(eltType);
 	// Current RCU instance index
 	var instanceIdx : atomic int;
 	// Current number of readers (TODO: Need Task-Local-Storage)
@@ -68,9 +68,9 @@ class DistVectorImpl : CollectionImpl {
 	var nextLocaleAlloc = 1;
 
 	// Requires reader or writer privilege
-	proc getInstance() {
+	proc getSlot(slotIdx) {
 		var idx = instanceIdx.read();
-		return instances[idx];
+		return instances[idx][slotIdx];
 	}
 
 	proc acquireRead() {
@@ -107,14 +107,17 @@ class DistVectorImpl : CollectionImpl {
 		}
 	}
 
-	proc appendDomain(idx) {
-		// Allocate a slot 
-		var newSlot : DistVectorMutableSingleton(eltType);
-		on Locales[nextLocaleAlloc % LocaleSpace.size] {
-			newSlot = new DistVectorMutableSingleton(eltType);
+	proc allocateSlot(slotIdx, nCells) {
+		// Allocate a slot
+		// writeln("Allocating for slot #", slotIdx);
+		var newSlot = new DistVectorSlot(eltType);
+		newSlot.dom = {0..nCells};
+		for i in 0 .. nCells {
+			on Locales[(nextLocaleAlloc + i) % LocaleSpace.size] {
+				newSlot.cells[i] = new DistVectorMutableSingleton(eltType);
+			}
 		}
 		
-
 		coforall loc in Locales do on loc {
 			var _this = getPrivatizedThis;
 			_this.nextLocaleAlloc = _this.nextLocaleAlloc + 1;
@@ -124,17 +127,14 @@ class DistVectorImpl : CollectionImpl {
     		else newIdx = 1;
 
     		// Read and Copy old data to new...
-    		var oldInstance = _this.instances[oldIdx];
+    		ref oldInstance = _this.instances[oldIdx];
     		ref newInstance = _this.instances[newIdx];
-    		newInstance.dom = oldInstance.dom;
-    		newInstance.arr = oldInstance.arr;
+    		newInstance = oldInstance;
 
     		// Update copy with new data...
-    		newInstance.dom += idx;
-    		newInstance.arr[idx] = newSlot;
+    		newInstance[slotIdx] = newSlot;
 		}
-}
-
+	}
 
 	proc DistVectorImpl(type eltType, lock : DistVectorWriterLock) {
 		instanceIdx.write(1);
@@ -164,21 +164,36 @@ class DistVectorImpl : CollectionImpl {
       return chpl_getPrivatizedCopy(this.type, pid);
     }
 
+    inline proc isSlotAllocated(slotIdx) {
+    	return getSlot[slotIdx].dom != {0..-1};
+    }
+
     proc this(idx : int) ref {
+    	var (slotIdx, cellIdx) = getIndex(idx);
     	var slot : DistVectorMutableSingleton(eltType);
+
+    	// Fast path
+    	acquireRead();
+    	if isSlotAllocated(slotIdx) {
+    		slot = getSlot(slotIdx).cells[cellIdx];
+	    	releaseRead();
+	    	slot.used = true;
+	    	return slot.slot;
+    	}
+    	releaseRead();
+
+    	// Slow Path
     	while true {
 	    	acquireRead();
-	    	var instance = getInstance();
-	    	if !instance.dom.member(idx) {
+	    	if !isSlotAllocated(slotIdx) {
 	    		releaseRead();
 	    		acquireWrite();
 
 	    		// Double-check
-	    		instance = getInstance();
-	    		if !instance.dom.member(idx) {
-	    			appendDomain(idx);
+	    		if !isSlotAllocated(slotIdx) {
+	    			allocateSlot(slotIdx, ((1 << slotIdx - 1) - 1));
 	    			switchInstance();
-	    			slot = getInstance().arr[idx];
+	    			slot = getSlot(slotIdx).cells[cellIdx];
 
 		    		waitForReaders();
 		    		releaseWrite();
@@ -186,34 +201,40 @@ class DistVectorImpl : CollectionImpl {
 	    		}
 
 	    		// Already filled by someone else
-	    		slot = instance.arr[idx];
+	    		slot = getSlot(slotIdx).cells[cellIdx];
 	    		releaseWrite();
 	    		break;
 	    	}
 
 	    	// Exists...
-	    	slot = instance.arr[idx];
+	    	slot = getSlot(slotIdx).cells[cellIdx];
 	    	releaseRead();
 	    	break;
     	}
 
+    	slot.used = true;
     	return slot.slot;
     }
 
     proc contains(elt: eltType): bool {
     	acquireRead();
-    	var instance = getInstance();
-    	var retval = instance.dom.member(elt);
-    	releaseRead();
 
+    	var (slotIdx, cellIdx) = getIndex(elt);
+    	var retval = isSlotAllocated(slotIdx) && getSlot(slotIdx).cells[cellIdx].used;
+    	
+    	releaseRead();
     	return retval;
     }
 }
 
-record ArrayWrapper {
+record DistVectorSlot {
 	type eltType;
-	var dom : domain(int);
-	var arr : [dom] DistVectorMutableSingleton(eltType);
+	var dom = {0..-1};
+	var cells : [dom] DistVectorMutableSingleton(eltType);
+
+	inline proc isAllocated(slotIdx) {
+		return cells[slotIdx] != nil;
+	}
 }
 
 class DistVectorWriterLock {
@@ -231,5 +252,6 @@ class DistVectorWriterLock {
 class DistVectorMutableSingleton {
 	type eltType;
 	var slot : eltType;
+	var used : bool;
 }
 
