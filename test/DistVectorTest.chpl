@@ -3,12 +3,14 @@ use Random;
 use Benchmark;
 use Plot;
 
+config param nElems = 1024;
+
 class VectorWrapper {
   var vec : DistVector(int);
 }
 
 class ArrayWrapper {
-	var dom = {0..-1};
+	var dom = {0..nElems};
 	var arr : [dom] int;
 	var lock$ : sync bool;
 }
@@ -26,7 +28,7 @@ proc main() {
         var vec = (bd.userData : VectorWrapper).vec;
         var randStream = makeRandomStream(uint);
 		for ix in 1 .. bd.iterations {
-			var idx = ((randStream.getNext() % max((bd.iterations / 2), 1) : uint) + 1) : int;
+			var idx = ((randStream.getNext() % max(nElems, 1) : uint) + 1) : int;
 			vec[idx] = idx;
 		}
       },
@@ -36,7 +38,9 @@ proc main() {
       benchName = "DistVector",
       plotter = plotter,
       initFn = lambda (bmd : BenchmarkMetaData) : object {
-        return new VectorWrapper(new DistVector(int));
+        var wrapper = new VectorWrapper(new DistVector(int));
+        for i in 1 .. nElems do wrapper.vec[i] = 0;
+        return wrapper;
       }
   	);
 
@@ -47,7 +51,7 @@ proc main() {
 		for ix in 1 .. bd.iterations {
 			arrWrapper.lock$ = true;
 
-			var idx = ((randStream.getNext() % max((bd.iterations / 2), 1) : uint) + 1) : int;
+			var idx = ((randStream.getNext() % max(nElems, 1) : uint) + 1) : int;
 			if arrWrapper.dom.high < idx {
 				arrWrapper.dom = {0..idx};
 			}
