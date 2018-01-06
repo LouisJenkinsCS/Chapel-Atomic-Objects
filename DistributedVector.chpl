@@ -57,11 +57,17 @@ class DistVectorImpl : CollectionImpl {
 	// will update the current index and await read counter to hit 0. By waiting for it to hit 0, we
 	// ensure that no other writer to will modify an instance another reader is using while alternating.
 	// Readers will write to the same already-existing containers in either container.
-	var instances : [1..2] [1..64] DistVectorSlot(eltType);
+	var instances : [0..1] DistVectorInstance(eltType);
 	// Current RCU instance index
 	var instanceIdx : atomic int;
-	// Current number of readers (TODO: Need Task-Local-Storage)
-	var readCount : atomic int;
+
+	// If the threads 't0' and 't1' set readCounts 'rc0' and 'rc1' respectively,
+	// then given the current instance index 'idx', if t0 decrements the readCount
+	// corresponding to idx, then t1's decrement will leave that readCount negative.
+	// To correct this, we have t1 instead increment the readCount corresponding
+	// to idx, and decrement the other readCounter in place of t0. 
+	var readCount : [0..1] atomic int;
+
 	// Lock all writers must acquire; it is allocated on a single node to ensure they all
 	// may linearize on it.
 	var writeLock : DistVectorWriterLock;
@@ -74,11 +80,20 @@ class DistVectorImpl : CollectionImpl {
 	}
 
 	proc acquireRead() {
-		readCount.add(1);
+		var idx = instanceIdx.read();
+		readCount[idx].add(1);
 	}
 
+
 	proc releaseRead() {
-		readCount.sub(1);
+		var idx = instanceIdx.read();
+		var cnt = readCount[idx].fetchAndSub(1);
+
+		// Negative; fix counter and decrement other
+		if cnt < 1 {
+			readCount[idx].add(1);
+			readCount[!idx].sub(1);
+		}
 	}
 
 	proc acquireWrite() {
@@ -94,16 +109,15 @@ class DistVectorImpl : CollectionImpl {
 		// Update all instances...
 		coforall loc in Locales do on loc {
 			var _this = getPrivatizedThis;
-			var idx = _this.instanceIdx.read();
-			if idx == 1 then _this.instanceIdx.write(2);
-			else _this.instanceIdx.write(1);
+			var idx = _this.instanceIdx.write(!_this.instanceIdx.read());
 		}
 	}
 
 	inline proc waitForReaders() {
 		coforall loc in Locales do on loc {
 			var _this = getPrivatizedThis;
-			_this.readCount.waitFor(0);
+			var idx = _this.instanceIdx.read();
+			_this.readCount[idx].waitFor(0);
 		}
 	}
 
@@ -227,14 +241,16 @@ class DistVectorImpl : CollectionImpl {
     }
 }
 
-record DistVectorSlot {
+class DistVectorSlot {
 	type eltType;
-	var dom = {0..-1};
-	var cells : [dom] DistVectorMutableSingleton(eltType);
+	var elems : (1024 * eltType);
+	var full : atomic bool;
+	var used : atomic int;
+}
 
-	inline proc isAllocated(slotIdx) {
-		return cells[slotIdx] != nil;
-	}
+record DistVectorInstance {
+	type eltType;
+	var arr : [{0..0}] DistVectorSlot(eltType);
 }
 
 class DistVectorWriterLock {
@@ -247,11 +263,5 @@ class DistVectorWriterLock {
 	inline proc unlock() {
 		lock$;
 	}
-}
-
-class DistVectorMutableSingleton {
-	type eltType;
-	var slot : eltType;
-	var used : bool;
 }
 
