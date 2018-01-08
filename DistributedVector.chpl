@@ -195,7 +195,7 @@ class DistVectorImpl : CollectionImpl {
     }
 
     // Indexes into the distributed vector
-    proc this(idx : int) {
+    proc this(idx : int) ref {
     	var instance = currInstance;
 
     	// Fast path
@@ -208,74 +208,62 @@ class DistVectorImpl : CollectionImpl {
 	    	return elt;
     	}
     	releaseRead(rcIdx);
-
-    	while true {
-	    	acquireRead();
-	    	if !isSlotAllocated(slotIdx) {
-	    		releaseRead();
-	    		acquireWrite();
-
-	    		// Double-check
-	    		if !isSlotAllocated(slotIdx) {
-	    			allocateSlot(slotIdx, ((1 << slotIdx - 1) - 1));
-	    			switchInstance();
-	    			slot = getSlot(slotIdx).cells[cellIdx];
-
-		    		waitForReaders();
-		    		releaseWrite();
-		    		break;
-	    		}
-
-	    		// Already filled by someone else
-	    		slot = getSlot(slotIdx).cells[cellIdx];
-	    		releaseWrite();
-	    		break;
-	    	}
-
-	    	// Exists...
-	    	slot = getSlot(slotIdx).cells[cellIdx];
-	    	releaseRead();
-	    	break;
-    	}
-
-    	slot.used = true;
-    	return slot.slot;
+    	halt("idx #", idx, " is out of bounds...");
     }
 
     proc contains(elt: eltType): bool {
-    	acquireRead();
-
-    	var (slotIdx, cellIdx) = getIndex(elt);
-    	var retval = isSlotAllocated(slotIdx) && getSlot(slotIdx).cells[cellIdx].used;
+    	var rcIdx = acquireRead();
+    	var instance = currInstance;
+    	var found : atomic bool;
     	
-    	releaseRead();
-    	return retval;
+    	forall slot in instance.slots {
+    		if !found.read() {
+    			on slot do for eltIdx in 1 .. slot.used.readXX() {
+    				if elt == slot[eltIdx] {
+    					found.write(true);
+    					break;
+    				}
+    			}
+    		}
+    	}
+
+    	releaseRead(rcIdx);
+    	return found.read();
     }
 }
 
+// Each slot contains DistVectorChunkSize contiguous chunks of data.
+// Since the entire chunk is allocated at one time, we keep track of
+// portion of the chunk that is actually in use via a sync variable, 'used'.
+// Readers can safely read 'used' using non-blocking approaches, but writers
+// must first acquire 'used' as full -> empty to retrieve both the number
+// of chunk used and proper mutual exclusion; they then make their changes 
+// to the next unused chunk and release 'used' as empty -> full.
+// This approach provides a second and less costly performance penalty for
+// writers, and yet still allow for readers to be without cost. 
 class DistVectorSlot {
 	type eltType;
 	var elems : (DistVectorChunkSize * eltType);
 	var full : atomic bool;
-	var used : atomic int;
+	var used : sync int = 0;
 }
 
 record DistVectorInstance {
 	type eltType;
-	var arr : [{0..0}] DistVectorSlot(eltType);
+	var slots : [{0..0}] DistVectorSlot(eltType);
 
 	// Determines if the requested index currently exists, which is true if and only if
 	// the slot is allocated and that the position in the slot requested is in use.
 	proc isAllocated(idx : int) {
 		var slotIdx = idx / DistVectorChunkSize;
 		var elemIdx = (idx % DistVectorChunkSize) + 1;
-		return arr.size > slotIdx && arr[slotIdx].used.read() >= elemIdx;
+		return slots.size > slotIdx && slots[slotIdx].used.readXX() >= elemIdx;
 	}
 
 	proc this(idx : int) : ref {
 		var slotIdx = idx / DistVectorChunkSize;
 		var elemIdx = (idx % DistVectorChunkSize) + 1;
-		return arr[slotIdx][elemIdx];
+		return slots[slotIdx][elemIdx];
 	}
 }
 
