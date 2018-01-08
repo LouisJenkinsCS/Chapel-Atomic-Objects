@@ -19,6 +19,8 @@ use BitIndexer;
 	they are using the new or old (transient state) version. 
 */
 
+config param DistVectorChunkSize = 1024;
+
 record DistVector {
 	type eltType;
 
@@ -61,11 +63,9 @@ class DistVectorImpl : CollectionImpl {
 	// Current RCU instance index
 	var instanceIdx : atomic int;
 
-	// If the threads 't0' and 't1' set readCounts 'rc0' and 'rc1' respectively,
-	// then given the current instance index 'idx', if t0 decrements the readCount
-	// corresponding to idx, then t1's decrement will leave that readCount negative.
-	// To correct this, we have t1 instead increment the readCount corresponding
-	// to idx, and decrement the other readCounter in place of t0. 
+	// Current number of readers for any given index (readCount[0..1] for instances[0..1])
+	// When a reader acquires access to one of the instances, it must notify to the writer
+	// that it must not continue perform unsafe writes to that given instance.
 	var readCount : [0..1] atomic int;
 
 	// Lock all writers must acquire; it is allocated on a single node to ensure they all
@@ -79,21 +79,18 @@ class DistVectorImpl : CollectionImpl {
 		return instances[idx][slotIdx];
 	}
 
-	proc acquireRead() {
+	// Acquires read-access to the current instance. The index of the instance
+	// is returned so that the reader may release read-access for the appropriate instance.
+	proc acquireRead() : int {
 		var idx = instanceIdx.read();
 		readCount[idx].add(1);
+		return idx;
 	}
 
-
-	proc releaseRead() {
-		var idx = instanceIdx.read();
+	// Releases read-access to the current instance. The index must be the same
+	// that is obtained from the 'acquireRead' read-barrier 
+	proc releaseRead(idx : int) {
 		var cnt = readCount[idx].fetchAndSub(1);
-
-		// Negative; fix counter and decrement other
-		if cnt < 1 {
-			readCount[idx].add(1);
-			readCount[!idx].sub(1);
-		}
 	}
 
 	proc acquireWrite() {
@@ -102,6 +99,22 @@ class DistVectorImpl : CollectionImpl {
 
 	proc releaseWrite() {
 		writeLock.unlock();
+	}
+
+	// NOTE: Check whether this function returns privatized data only
+	inline proc currRC : ref {
+		var idx = instanceIdx.read();
+		return readCount[idx];
+	}
+
+	inline proc otherRC : ref {
+		var idx = !instanceIdx.read();
+		return readCount[idx];
+	}
+
+	inline proc currInstance : ref {
+		var idx = instanceIdx.read();
+		return instances[idx];
 	}
 
 	// Requires writer privilege
@@ -116,14 +129,13 @@ class DistVectorImpl : CollectionImpl {
 	inline proc waitForReaders() {
 		coforall loc in Locales do on loc {
 			var _this = getPrivatizedThis;
-			var idx = _this.instanceIdx.read();
+			var idx = !_this.instanceIdx.read();
 			_this.readCount[idx].waitFor(0);
 		}
 	}
 
 	proc allocateSlot(slotIdx, nCells) {
 		// Allocate a slot
-		// writeln("Allocating for slot #", slotIdx);
 		var newSlot = new DistVectorSlot(eltType);
 		newSlot.dom = {0..nCells};
 		for i in 0 .. nCells {
@@ -182,21 +194,21 @@ class DistVectorImpl : CollectionImpl {
     	return getSlot[slotIdx].dom != {0..-1};
     }
 
-    proc this(idx : int) ref {
-    	var (slotIdx, cellIdx) = getIndex(idx);
-    	var slot : DistVectorMutableSingleton(eltType);
+    // Indexes into the distributed vector
+    proc this(idx : int) {
+    	var instance = currInstance;
 
     	// Fast path
-    	acquireRead();
-    	if isSlotAllocated(slotIdx) {
-    		slot = getSlot(slotIdx).cells[cellIdx];
-	    	releaseRead();
-	    	slot.used = true;
-	    	return slot.slot;
+    	// If the index is currently allocated, then we simply
+    	// fetch the actual element being referenced.
+    	var rcIdx = acquireRead();
+    	if instance.isAllocated(idx) {
+    		ref elt = instance[idx];
+	    	releaseRead(rcIdx);
+	    	return elt;
     	}
-    	releaseRead();
+    	releaseRead(rcIdx);
 
-    	// Slow Path
     	while true {
 	    	acquireRead();
 	    	if !isSlotAllocated(slotIdx) {
@@ -243,7 +255,7 @@ class DistVectorImpl : CollectionImpl {
 
 class DistVectorSlot {
 	type eltType;
-	var elems : (1024 * eltType);
+	var elems : (DistVectorChunkSize * eltType);
 	var full : atomic bool;
 	var used : atomic int;
 }
@@ -251,6 +263,20 @@ class DistVectorSlot {
 record DistVectorInstance {
 	type eltType;
 	var arr : [{0..0}] DistVectorSlot(eltType);
+
+	// Determines if the requested index currently exists, which is true if and only if
+	// the slot is allocated and that the position in the slot requested is in use.
+	proc isAllocated(idx : int) {
+		var slotIdx = idx / DistVectorChunkSize;
+		var elemIdx = (idx % DistVectorChunkSize) + 1;
+		return arr.size > slotIdx && arr[slotIdx].used.read() >= elemIdx;
+	}
+
+	proc this(idx : int) : ref {
+		var slotIdx = idx / DistVectorChunkSize;
+		var elemIdx = (idx % DistVectorChunkSize) + 1;
+		return arr[slotIdx][elemIdx];
+	}
 }
 
 class DistVectorWriterLock {
