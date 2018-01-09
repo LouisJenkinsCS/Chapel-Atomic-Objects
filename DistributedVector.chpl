@@ -190,18 +190,47 @@ class DistVectorImpl : CollectionImpl {
       return chpl_getPrivatizedCopy(this.type, pid);
     }
 
-    inline proc isSlotAllocated(slotIdx) {
-    	return getSlot[slotIdx].dom != {0..-1};
+    proc add(elt: eltType): bool {
+    	// As it is possible for other insertions to update
+    	while true {
+    		var rcIdx = acquireRead();
+    		var instance = currInstance;
+    		var slot = instance.slots[instance.slots.size - 1];
+    		ref cachedUsed = slot.used;
+    		
+    		// Check number of used space (blocking read)
+    		var used = cachedUsed;
+    		if used >= DistVectorChunkSize {
+    			// Check if instance is the same; if so, we need to become
+    			// the RCU writer. Note that if there was another RCU writer,
+    			// we would still be blocked on reading the 'cache' sync variable.
+    			if instance == currInstance {
+    				// TODO
+    			} else {
+    				// Fill sync variable and loop again as current instance was updated...
+    				cachedUsed = used;
+    				releaseRead(rcIdx);
+    				continue;
+    			}
+    		} else {
+    			// There is enough room for our operation so we claim our space
+    			// and fill sync variable for others.
+    			slot.elems[used + 1] = elt;
+    			cachedUsed = used + 1;
+    		}
+
+    		releaseRead(rcIdx);
+    		return true;
+    	}
     }
 
     // Indexes into the distributed vector
     proc this(idx : int) ref {
+    	var rcIdx = acquireRead();
     	var instance = currInstance;
 
-    	// Fast path
     	// If the index is currently allocated, then we simply
     	// fetch the actual element being referenced.
-    	var rcIdx = acquireRead();
     	if instance.isAllocated(idx) {
     		ref elt = instance[idx];
 	    	releaseRead(rcIdx);
@@ -244,7 +273,6 @@ class DistVectorImpl : CollectionImpl {
 class DistVectorSlot {
 	type eltType;
 	var elems : (DistVectorChunkSize * eltType);
-	var full : atomic bool;
 	var used : sync int = 0;
 }
 
