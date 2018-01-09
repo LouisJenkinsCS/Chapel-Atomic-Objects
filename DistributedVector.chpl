@@ -126,10 +126,9 @@ class DistVectorImpl : CollectionImpl {
 		}
 	}
 
-	inline proc waitForReaders() {
+	inline proc waitForReaders(idx : int) {
 		coforall loc in Locales do on loc {
 			var _this = getPrivatizedThis;
-			var idx = !_this.instanceIdx.read();
 			_this.readCount[idx].waitFor(0);
 		}
 	}
@@ -205,7 +204,31 @@ class DistVectorImpl : CollectionImpl {
     			// the RCU writer. Note that if there was another RCU writer,
     			// we would still be blocked on reading the 'cache' sync variable.
     			if instance == currInstance {
-    				// TODO
+    				releaseRead(rcIdx);
+    				acquireWrite();
+
+    				// To ensure that data is distributed, we cycle between each node to determine
+    				// which will allocate the next chunk. For example, given 2 nodes and 4096 elements
+    				// with a chunk size of 1024, we will have indices 0..1023 and 2048 ... 3071 mapping to node 1
+    				// and 1024 .. 2047 and 3072 .. 4091 mapping to node 2, similar to a cyclic block distribution.
+    				var instIdx = instanceIdx.read();
+    				var newSlot : DistVectorSlot(eltType) = nil;
+    				var locidToAlloc = (nextLocaleAlloc + 1) % numLocales;
+    				on Locales[locidToAlloc] do newSlot = new DistVectorSlot(eltType);
+
+    				// We append the allocated slot to the unused instance and set it as the current (cross-node update)
+    				coforall loc in Locales do on loc {
+    					var _this = getPrivatizedThis;
+    					_this.nextLocaleAlloc = locidToAlloc;
+    					var newInstIdx = !_this.instanceIdx.read();
+    					var newInstance = _this.instances[newInstIdx];
+    					newInstance.slots.push_back(newSlot);
+    					_this.instanceIdx.write(newInstIdx);
+    				}
+
+    				// Unblock readers and wait for them to finish.
+    				cacheUsed = used;
+    				waitForReaders(instIdx);
     			} else {
     				// Fill sync variable and loop again as current instance was updated...
     				cachedUsed = used;
