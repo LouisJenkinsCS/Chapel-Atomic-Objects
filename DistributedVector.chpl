@@ -123,6 +123,7 @@ class DistVectorImpl : CollectionImpl {
 
 	proc DistVectorImpl(type eltType, lock : DistVectorWriterLock) {
 		instances[0].slots[0] = new DistVectorSlot(eltType);
+		instances[1].slots[0] = instances[0].slots[0];
 		writeLock = lock;
 		pid = _newPrivatizedClass(this);
 	}
@@ -130,7 +131,7 @@ class DistVectorImpl : CollectionImpl {
  	proc DistVectorImpl(other, privData, type eltType = other.eltType) {
 		instanceIdx.write(0);
 		instances[0].slots[0] = other.instances[0].slots[0];
-
+		instances[1].slots[0] = instances[0].slots[0];
 		this.writeLock = other.writeLock;
     }
 
@@ -149,71 +150,41 @@ class DistVectorImpl : CollectionImpl {
       return chpl_getPrivatizedCopy(this.type, pid);
     }
 
-    proc add(elt: eltType): bool {
-    	// As it is possible for other insertions to update
-    	while true {
-    		var rcIdx = acquireRead();
-    		var instIdx = instanceIdx.read();
-    		var instance = instances[instIdx];
-    		var slot = instance.slots[instance.slots.size - 1];
-    		ref cachedUsed = slot.used$;
-    		
-    		// Check number of used space (blocking read)
-    		var used = cachedUsed;
-    		if used >= DistVectorChunkSize {
-    			// Check if instance is the same; if so, we need to become
-    			// the RCU writer. Note that if there was another RCU writer,
-    			// we would still be blocked on reading the 'cache' sync variable.
-    			if instIdx == instanceIdx.read() {
-    				releaseRead(rcIdx);
-    				acquireWrite();
+    // Expands the array to the next chunk size.
+    proc expand(size : int) {
+    	acquireWrite();
 
-    				// To ensure that data is distributed, we cycle between each node to determine
-    				// which will allocate the next chunk. For example, given 2 nodes and 4096 elements
-    				// with a chunk size of 1024, we will have indices 0..1023 and 2048 ... 3071 mapping to node 1
-    				// and 1024 .. 2047 and 3072 .. 4091 mapping to node 2, similar to a cyclic block distribution.
-    				var instIdx = instanceIdx.read();
-    				var newSlot : DistVectorSlot(eltType) = nil;
-    				var locidToAlloc = (nextLocaleAlloc + 1) % numLocales;
-    				on Locales[locidToAlloc] do newSlot = new DistVectorSlot(eltType);
+		// Allocate memory in a block-cyclic manner.
+		var instIdx = instanceIdx.read();
+		var numNewSlots = (size / DistVectorChunkSize) + min(size % DistVectorChunkSize, 1);
+		var newSlots : [{1..0}] DistVectorSlot(eltType);
+		var currLocId = 0;
+		for i in 1 .. numNewSlots {
+			on Locales[currLocId] {
+				newSlots.push_back(new DistVectorSlot(eltType));
+			}
 
-    				// We append the allocated slot to the unused instance and set it as the current (cross-node update)
-    				coforall loc in Locales do on loc {
-    					var _this = getPrivatizedThis;
-    					_this.nextLocaleAlloc = locidToAlloc;
-    					var newInstIdx = !(_this.instanceIdx.read());
-    					var newInstance = _this.instances[newInstIdx];
-    					newInstance.slots.push_back(newSlot);
-    					_this.instanceIdx.write(newInstIdx);
-    				}
+			currLocId = (currLocId + 1) % numLocales;
+		}
 
-    				// Unblock readers and wait for them to finish.
-    				cachedUsed = used;
-    				waitForReaders(instIdx);
-    			} else {
-    				// Fill sync variable and loop again as current instance was updated...
-    				cachedUsed = used;
-    				releaseRead(rcIdx);
-    				continue;
-    			}
-    		} else {
-    			// There is enough room for our operation so we claim our space
-    			// and fill sync variable for others.
-    			slot.elems[used + 1] = elt;
-    			cachedUsed = used + 1;
-    		}
+		// We append the allocated slot to the unused instance and set it as the current (cross-node update)
+		coforall loc in Locales do on loc {
+			var _this = getPrivatizedThis;
+			var newInstIdx = !(_this.instanceIdx.read());
+			ref newInstance = _this.instances[newInstIdx];
+			newInstance.slots.push_back(newSlots);
+			_this.instanceIdx.write(newInstIdx);
+		}
 
-    		releaseRead(rcIdx);
-    		return true;
-    	}
-
-    	return false;
+		// Unblock readers, wait for them to finish, then release.
+		waitForReaders(instIdx);
+		releaseWrite();
     }
 
     // Indexes into the distributed vector
     proc this(idx : int) ref {
     	var rcIdx = acquireRead();
-    	var instance = currInstance;
+    	ref instance = currInstance;
 
     	// If the index is currently allocated, then we simply
     	// fetch the actual element being referenced.
@@ -223,7 +194,7 @@ class DistVectorImpl : CollectionImpl {
 	    	return elt;
     	}
     	releaseRead(rcIdx);
-    	halt("idx #", idx, " is out of bounds...");
+    	halt("idx #", idx, " is out of bounds... max=", instance.slots.size * DistVectorChunkSize, ", instIdx=", instanceIdx.read());
     }
 
     proc contains(elt: eltType): bool {
@@ -233,7 +204,7 @@ class DistVectorImpl : CollectionImpl {
     	
     	forall slot in instance.slots {
     		if !found.read() {
-    			on slot do for eltIdx in 1 .. slot.used$.readXX() {
+    			on slot do for eltIdx in 1 .. DistVectorChunkSize {
     				if elt == slot[eltIdx] {
     					found.write(true);
     					break;
@@ -259,7 +230,6 @@ class DistVectorImpl : CollectionImpl {
 class DistVectorSlot {
 	type eltType;
 	var elems : (DistVectorChunkSize * eltType);
-	var used$ : sync int = 0;
 }
 
 record DistVectorInstance {
@@ -269,9 +239,7 @@ record DistVectorInstance {
 	// Determines if the requested index currently exists, which is true if and only if
 	// the slot is allocated and that the position in the slot requested is in use.
 	proc isAllocated(idx : int) {
-		var slotIdx = idx / DistVectorChunkSize;
-		var elemIdx = (idx % DistVectorChunkSize) + 1;
-		return slots.size > slotIdx && slots[slotIdx].used$.readXX() >= elemIdx;
+		return slots.size > (idx / DistVectorChunkSize);
 	}
 
 	proc this(idx : int) ref {

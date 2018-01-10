@@ -3,7 +3,7 @@ use Random;
 use Benchmark;
 use Plot;
 
-config param nElems = 1024;
+config param nElems = 1024 * 1024;
 
 class VectorWrapper {
   var vec : DistVector(int);
@@ -39,9 +39,7 @@ proc main() {
       plotter = plotter,
       initFn = lambda (bmd : BenchmarkMetaData) : object {
         var wrapper = new VectorWrapper(new DistVector(int));
-        writeln("Filling vector...");
-        wrapper.vec.addBulk(1..nElems);
-        writeln("Done filling...");
+        wrapper.vec.expand(nElems);
         return wrapper;
       }
   	);
@@ -51,18 +49,37 @@ proc main() {
         var arrWrapper = (bd.userData : ArrayWrapper);
         var randStream = makeRandomStream(uint);
 		for ix in 1 .. bd.iterations {
-			//arrWrapper.lock$ = true;
+			arrWrapper.lock$ = true;
 
 			var idx = ((randStream.getNext() % max(nElems, 1) : uint)) : int;
 			arrWrapper.arr[idx] = idx;
 			
-			//arrWrapper.lock$;
+			arrWrapper.lock$;
 		}
       },
       benchTime = 1,
       deinitFn = deinitFn,
       targetLocales=targetLocales,
       benchName = "SyncArray",
+      plotter = plotter,
+      initFn = lambda (bmd : BenchmarkMetaData) : object {
+        return new ArrayWrapper();
+      }
+  	);
+
+  	runBenchmarkMultiplePlotted(
+      benchFn = lambda(bd : BenchmarkData) {
+        var arrWrapper = (bd.userData : ArrayWrapper);
+        var randStream = makeRandomStream(uint);
+		for ix in 1 .. bd.iterations {
+			var idx = ((randStream.getNext() % max(nElems, 1) : uint)) : int;
+			arrWrapper.arr[idx] = idx;
+		}
+      },
+      benchTime = 1,
+      deinitFn = deinitFn,
+      targetLocales=targetLocales,
+      benchName = "Array",
       plotter = plotter,
       initFn = lambda (bmd : BenchmarkMetaData) : object {
         return new ArrayWrapper();
