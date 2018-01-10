@@ -1,5 +1,4 @@
 use Collection;
-use BitIndexer;
 
 /*
 	DistributedVector is a scalable, resizable, indexable, totally-ordered, and distributed
@@ -90,7 +89,7 @@ class DistVectorImpl : CollectionImpl {
 	// Releases read-access to the current instance. The index must be the same
 	// that is obtained from the 'acquireRead' read-barrier 
 	proc releaseRead(idx : int) {
-		var cnt = readCount[idx].fetchAndSub(1);
+		readCount[idx].sub(1);
 	}
 
 	proc acquireWrite() {
@@ -101,18 +100,7 @@ class DistVectorImpl : CollectionImpl {
 		writeLock.unlock();
 	}
 
-	// NOTE: Check whether this function returns privatized data only
-	inline proc currRC : ref {
-		var idx = instanceIdx.read();
-		return readCount[idx];
-	}
-
-	inline proc otherRC : ref {
-		var idx = !instanceIdx.read();
-		return readCount[idx];
-	}
-
-	inline proc currInstance : ref {
+	inline proc currInstance ref {
 		var idx = instanceIdx.read();
 		return instances[idx];
 	}
@@ -122,7 +110,7 @@ class DistVectorImpl : CollectionImpl {
 		// Update all instances...
 		coforall loc in Locales do on loc {
 			var _this = getPrivatizedThis;
-			var idx = _this.instanceIdx.write(!_this.instanceIdx.read());
+			var idx = _this.instanceIdx.write(!(_this.instanceIdx.read()));
 		}
 	}
 
@@ -133,43 +121,15 @@ class DistVectorImpl : CollectionImpl {
 		}
 	}
 
-	proc allocateSlot(slotIdx, nCells) {
-		// Allocate a slot
-		var newSlot = new DistVectorSlot(eltType);
-		newSlot.dom = {0..nCells};
-		for i in 0 .. nCells {
-			on Locales[(nextLocaleAlloc + i) % LocaleSpace.size] {
-				newSlot.cells[i] = new DistVectorMutableSingleton(eltType);
-			}
-		}
-		
-		coforall loc in Locales do on loc {
-			var _this = getPrivatizedThis;
-			_this.nextLocaleAlloc = _this.nextLocaleAlloc + 1;
-			var oldIdx = _this.instanceIdx.read();
-    		var newIdx : int;
-    		if oldIdx == 1 then newIdx = 2;
-    		else newIdx = 1;
-
-    		// Read and Copy old data to new...
-    		ref oldInstance = _this.instances[oldIdx];
-    		ref newInstance = _this.instances[newIdx];
-    		newInstance = oldInstance;
-
-    		// Update copy with new data...
-    		newInstance[slotIdx] = newSlot;
-		}
-	}
-
 	proc DistVectorImpl(type eltType, lock : DistVectorWriterLock) {
-		instanceIdx.write(1);
-
+		instances[0].slots[0] = new DistVectorSlot(eltType);
 		writeLock = lock;
 		pid = _newPrivatizedClass(this);
 	}
 
  	proc DistVectorImpl(other, privData, type eltType = other.eltType) {
-		instanceIdx.write(1);
+		instanceIdx.write(0);
+		instances[0].slots[0] = other.instances[0].slots[0];
 
 		this.writeLock = other.writeLock;
     }
@@ -193,9 +153,10 @@ class DistVectorImpl : CollectionImpl {
     	// As it is possible for other insertions to update
     	while true {
     		var rcIdx = acquireRead();
-    		var instance = currInstance;
+    		var instIdx = instanceIdx.read();
+    		var instance = instances[instIdx];
     		var slot = instance.slots[instance.slots.size - 1];
-    		ref cachedUsed = slot.used;
+    		ref cachedUsed = slot.used$;
     		
     		// Check number of used space (blocking read)
     		var used = cachedUsed;
@@ -203,7 +164,7 @@ class DistVectorImpl : CollectionImpl {
     			// Check if instance is the same; if so, we need to become
     			// the RCU writer. Note that if there was another RCU writer,
     			// we would still be blocked on reading the 'cache' sync variable.
-    			if instance == currInstance {
+    			if instIdx == instanceIdx.read() {
     				releaseRead(rcIdx);
     				acquireWrite();
 
@@ -220,14 +181,14 @@ class DistVectorImpl : CollectionImpl {
     				coforall loc in Locales do on loc {
     					var _this = getPrivatizedThis;
     					_this.nextLocaleAlloc = locidToAlloc;
-    					var newInstIdx = !_this.instanceIdx.read();
+    					var newInstIdx = !(_this.instanceIdx.read());
     					var newInstance = _this.instances[newInstIdx];
     					newInstance.slots.push_back(newSlot);
     					_this.instanceIdx.write(newInstIdx);
     				}
 
     				// Unblock readers and wait for them to finish.
-    				cacheUsed = used;
+    				cachedUsed = used;
     				waitForReaders(instIdx);
     			} else {
     				// Fill sync variable and loop again as current instance was updated...
@@ -245,6 +206,8 @@ class DistVectorImpl : CollectionImpl {
     		releaseRead(rcIdx);
     		return true;
     	}
+
+    	return false;
     }
 
     // Indexes into the distributed vector
@@ -270,7 +233,7 @@ class DistVectorImpl : CollectionImpl {
     	
     	forall slot in instance.slots {
     		if !found.read() {
-    			on slot do for eltIdx in 1 .. slot.used.readXX() {
+    			on slot do for eltIdx in 1 .. slot.used$.readXX() {
     				if elt == slot[eltIdx] {
     					found.write(true);
     					break;
@@ -296,7 +259,7 @@ class DistVectorImpl : CollectionImpl {
 class DistVectorSlot {
 	type eltType;
 	var elems : (DistVectorChunkSize * eltType);
-	var used : sync int = 0;
+	var used$ : sync int = 0;
 }
 
 record DistVectorInstance {
@@ -308,13 +271,13 @@ record DistVectorInstance {
 	proc isAllocated(idx : int) {
 		var slotIdx = idx / DistVectorChunkSize;
 		var elemIdx = (idx % DistVectorChunkSize) + 1;
-		return slots.size > slotIdx && slots[slotIdx].used.readXX() >= elemIdx;
+		return slots.size > slotIdx && slots[slotIdx].used$.readXX() >= elemIdx;
 	}
 
-	proc this(idx : int) : ref {
+	proc this(idx : int) ref {
 		var slotIdx = idx / DistVectorChunkSize;
 		var elemIdx = (idx % DistVectorChunkSize) + 1;
-		return slots[slotIdx][elemIdx];
+		return slots[slotIdx].elems[elemIdx];
 	}
 }
 

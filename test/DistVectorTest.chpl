@@ -28,7 +28,7 @@ proc main() {
         var vec = (bd.userData : VectorWrapper).vec;
         var randStream = makeRandomStream(uint);
 		for ix in 1 .. bd.iterations {
-			var idx = ((randStream.getNext() % max(nElems, 1) : uint) + 1) : int;
+			var idx = ((randStream.getNext() % max(nElems, 1) : uint)) : int;
 			vec[idx] = idx;
 		}
       },
@@ -39,7 +39,9 @@ proc main() {
       plotter = plotter,
       initFn = lambda (bmd : BenchmarkMetaData) : object {
         var wrapper = new VectorWrapper(new DistVector(int));
-        for i in 1 .. nElems do wrapper.vec[i] = 0;
+        writeln("Filling vector...");
+        wrapper.vec.addBulk(1..nElems);
+        writeln("Done filling...");
         return wrapper;
       }
   	);
@@ -49,15 +51,12 @@ proc main() {
         var arrWrapper = (bd.userData : ArrayWrapper);
         var randStream = makeRandomStream(uint);
 		for ix in 1 .. bd.iterations {
-			arrWrapper.lock$ = true;
+			//arrWrapper.lock$ = true;
 
-			var idx = ((randStream.getNext() % max(nElems, 1) : uint) + 1) : int;
-			if arrWrapper.dom.high < idx {
-				arrWrapper.dom = {0..idx};
-			}
+			var idx = ((randStream.getNext() % max(nElems, 1) : uint)) : int;
 			arrWrapper.arr[idx] = idx;
 			
-			arrWrapper.lock$;
+			//arrWrapper.lock$;
 		}
       },
       benchTime = 1,
