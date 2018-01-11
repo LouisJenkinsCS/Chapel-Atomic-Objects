@@ -25,12 +25,11 @@
 
 #define CHPL_PRIVATIZATION_BLOCK_SIZE 1024
 
-static int64_t chpl_capPrivateObjects = 0;
 static chpl_sync_aux_t writeLock;
 
 
 // Each block is an array of privatized objects
-typedef chpl_priv_block_t = void **;
+typedef void ** chpl_priv_block_t;
 
 // Each instance is a variable array of blocks
 typedef struct {
@@ -55,6 +54,23 @@ chpl_priv_block_t chpl_priv_block_create() {
 static int acquireRead() {
   int instIdx = atomic_load_int_least8_t(&currentInstanceIdx);
   atomic_fetch_add_uint_least32_t(&reader_count[instIdx], 1);
+
+  // Check if instance changed between calls.
+  if (instIdx != atomic_load_int_least8_t(&currentInstanceIdx)) {
+    atomic_fetch_sub_uint_least32_t(&reader_count[instIdx], 1);
+    
+    // Slow-path
+    while (true) {
+      instIdx = atomic_load_int_least8_t(&currentInstanceIdx);
+      atomic_fetch_add_uint_least32_t(&reader_count[instIdx], 1);      
+
+      if (instIdx == atomic_load_int_least8_t(&currentInstanceIdx)) {
+        break;
+      }
+
+      atomic_fetch_sub_uint_least32_t(&reader_count[instIdx], 1);
+    }
+  }
   return instIdx;
 }
 
@@ -77,12 +93,14 @@ static void releaseWrite() {
 void chpl_privatization_init(void) {
     chpl_sync_initAux(&writeLock);
     
-    // Clean...
+    // Init reader counts
     reader_count[0] = 0;
     reader_count[1] = 0;
 
-    // Both instances begin with the same block...
-    chpl_priv_instances[0].blocks = chpl_priv_block_create();
+    // Initialize first instance with a single block.
+    chpl_priv_instances[0].blocks = chpl_mem_allocManyZero(1, sizeof(chpl_priv_block_t),
+                           CHPL_RT_MD_COMM_PRV_OBJ_ARRAY, 0, 0);
+    chpl_priv_instances[0].blocks[0] = chpl_priv_block_create();
     chpl_priv_instances[0].len = 1;
 }
 
@@ -118,7 +136,7 @@ void chpl_newPrivatizedClass(void* v, int64_t pid) {
       // Switch instances
       int newInstIdx = !getCurrentInstanceIdx();
       // Free old memory
-      chpl_mem_free(chpl_priv_instances[newInstIdx].block, 0, 0);
+      chpl_mem_free(chpl_priv_instances[newInstIdx].blocks, 0, 0);
       // Allocate new space
       chpl_priv_block_t *newBlocks = chpl_mem_allocManyZero(blockIdx + 1, sizeof(*newBlocks),
                                    CHPL_RT_MD_COMM_PRV_OBJ_ARRAY, 0, 0);
@@ -130,7 +148,7 @@ void chpl_newPrivatizedClass(void* v, int64_t pid) {
         newBlocks[i] = chpl_priv_block_create();
       }
       // Set new data and instance
-      chpl_priv_instances[newInstIdx].block = newBlocks;
+      chpl_priv_instances[newInstIdx].blocks = newBlocks;
       chpl_priv_instances[newInstIdx].len = blockIdx;
       atomic_store_int_least8_t(&currentInstanceIdx, newInstIdx);
 
@@ -140,7 +158,7 @@ void chpl_newPrivatizedClass(void* v, int64_t pid) {
       }
 
       // Delete old instance data...
-      chpl_mem_free(chpl_priv_instances[instIdx].block, 0, 0);
+      chpl_mem_free(chpl_priv_instances[instIdx].blocks, 0, 0);
       releaseWrite();
     } else {
       int idx = pid % CHPL_PRIVATIZATION_BLOCK_SIZE;
@@ -149,6 +167,16 @@ void chpl_newPrivatizedClass(void* v, int64_t pid) {
       return;
     }
   }
+}
+
+void* chpl_getPrivatizedClass(int64_t i) {
+  void *ret = NULL;
+  int rcIdx = acquireRead();
+  int blockIdx = i / CHPL_PRIVATIZATION_BLOCK_SIZE;
+  int idx = i % CHPL_PRIVATIZATION_BLOCK_SIZE;
+  ret = chpl_priv_instances[rcIdx].blocks[blockIdx][idx];
+  releaseRead(rcIdx);
+  return ret;
 }
 
 void chpl_clearPrivatizedClass(int64_t i) {

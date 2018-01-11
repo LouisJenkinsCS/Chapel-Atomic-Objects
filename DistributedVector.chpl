@@ -83,6 +83,23 @@ class DistVectorImpl : CollectionImpl {
 	proc acquireRead() : int {
 		var idx = instanceIdx.read();
 		readCount[idx].add(1);
+
+		// Writer changed instance between calls...
+		if idx != instanceIdx.read() {
+			readCount[idx].sub(1);
+
+			// Slow-Path
+			while true {
+				idx = instanceIdx.read();
+				readCount[idx].add(1);
+
+				// Writer did not change instance between calls...
+				if idx == instanceIdx.read() then break;
+
+				// Undo reader count
+				readCount[idx].sub(1);
+			}
+		}
 		return idx;
 	}
 
