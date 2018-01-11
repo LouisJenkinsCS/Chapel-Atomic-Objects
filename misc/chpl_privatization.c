@@ -135,14 +135,19 @@ void chpl_newPrivatizedClass(void* v, int64_t pid) {
       atomic_store_int_least8_t(&currentInstanceIdx, newInstIdx);
 
       // Wait for readers to finish with old.
-      while (atomic_load_uint_least32_t(&reader_count[instIdx]) > 0);
+      while (atomic_load_uint_least32_t(&reader_count[instIdx]) > 0) {
+        chpl_task_yield();
+      }
 
       // Delete old instance data...
       chpl_mem_free(chpl_priv_instances[instIdx].block, 0, 0);
-
-      // TODO!
+      releaseWrite();
+    } else {
+      int idx = pid % CHPL_PRIVATIZATION_BLOCK_SIZE;
+      chpl_priv_instances[rcIdx].blocks[blockIdx][idx] = v;
+      releaseRead(rcIdx);
+      return;
     }
-    chpl_privateObjects[pid] = v;
   }
 }
 
