@@ -2,15 +2,17 @@ use DistributedVector;
 use Random;
 use Benchmark;
 use Plot;
+use BlockDist;
 
-config param nElems = 1024;
+config param nElems = 1024 * 1024;
 
 class VectorWrapper {
   var vec : DistVector(int);
 }
 
 class ArrayWrapper {
-	var dom = {0..nElems};
+	var space = {0..nElems};
+	var dom = space dmapped Block(boundingBox=space);
 	var arr : [dom] int;
 	var lock$ : sync bool;
 }
@@ -28,7 +30,7 @@ proc main() {
         var vec = (bd.userData : VectorWrapper).vec;
         var randStream = makeRandomStream(uint);
 		for ix in 1 .. bd.iterations {
-			var idx = ((randStream.getNext() % max(nElems, 1) : uint) + 1) : int;
+			var idx = ((randStream.getNext() % max(nElems, 1) : uint)) : int;
 			vec[idx] = idx;
 		}
       },
@@ -39,7 +41,7 @@ proc main() {
       plotter = plotter,
       initFn = lambda (bmd : BenchmarkMetaData) : object {
         var wrapper = new VectorWrapper(new DistVector(int));
-        for i in 1 .. nElems do wrapper.vec[i] = 0;
+        wrapper.vec.expand(nElems);
         return wrapper;
       }
   	);
@@ -51,10 +53,7 @@ proc main() {
 		for ix in 1 .. bd.iterations {
 			arrWrapper.lock$ = true;
 
-			var idx = ((randStream.getNext() % max(nElems, 1) : uint) + 1) : int;
-			if arrWrapper.dom.high < idx {
-				arrWrapper.dom = {0..idx};
-			}
+			var idx = ((randStream.getNext() % max(nElems, 1) : uint)) : int;
 			arrWrapper.arr[idx] = idx;
 			
 			arrWrapper.lock$;
@@ -64,6 +63,25 @@ proc main() {
       deinitFn = deinitFn,
       targetLocales=targetLocales,
       benchName = "SyncArray",
+      plotter = plotter,
+      initFn = lambda (bmd : BenchmarkMetaData) : object {
+        return new ArrayWrapper();
+      }
+  	);
+
+  	runBenchmarkMultiplePlotted(
+      benchFn = lambda(bd : BenchmarkData) {
+        var arrWrapper = (bd.userData : ArrayWrapper);
+        var randStream = makeRandomStream(uint);
+		for ix in 1 .. bd.iterations {
+			var idx = ((randStream.getNext() % max(nElems, 1) : uint)) : int;
+			arrWrapper.arr[idx] = idx;
+		}
+      },
+      benchTime = 1,
+      deinitFn = deinitFn,
+      targetLocales=targetLocales,
+      benchName = "Array",
       plotter = plotter,
       initFn = lambda (bmd : BenchmarkMetaData) : object {
         return new ArrayWrapper();
