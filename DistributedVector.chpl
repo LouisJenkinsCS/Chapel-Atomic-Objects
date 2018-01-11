@@ -135,6 +135,10 @@ class DistVectorImpl : CollectionImpl {
 		this.writeLock = other.writeLock;
     }
 
+    proc ~DistVectorImpl() {
+    	for slot in currInstance.slots do delete slot;
+    }
+
     pragma "no doc"
     proc dsiPrivatize(privData) {
         return new DistVectorImpl(this, privData);
@@ -170,8 +174,18 @@ class DistVectorImpl : CollectionImpl {
 		// We append the allocated slot to the unused instance and set it as the current (cross-node update)
 		coforall loc in Locales do on loc {
 			var _this = getPrivatizedThis;
-			var newInstIdx = !(_this.instanceIdx.read());
+			var oldInstIdx = _this.instanceIdx.read();
+			var newInstIdx = !oldInstIdx;
+			ref oldInstance = _this.instances[oldInstIdx];
 			ref newInstance = _this.instances[newInstIdx];
+
+			// Take ever
+			if oldInstance.slots.size > 1 {
+				var lo = newInstance.slots.size;
+				var hi = oldInstance.slots.size - 1;
+				newInstance.slots.push_back(oldInstance.slots[lo..hi]);
+			}
+			
 			newInstance.slots.push_back(newSlots);
 			_this.instanceIdx.write(newInstIdx);
 		}
@@ -215,6 +229,13 @@ class DistVectorImpl : CollectionImpl {
 
     	releaseRead(rcIdx);
     	return found.read();
+    }
+
+    proc size : int {
+    	var rcIdx = acquireRead();
+    	var sz = currInstance.slots.size * DistVectorChunkSize;
+    	releaseRead(rcIdx);
+    	return sz;
     }
 }
 

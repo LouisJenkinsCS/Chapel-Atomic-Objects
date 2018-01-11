@@ -2,6 +2,7 @@ use DistributedVector;
 use Random;
 use Benchmark;
 use Plot;
+use BlockDist;
 
 config param nElems = 1024 * 1024;
 
@@ -10,7 +11,8 @@ class VectorWrapper {
 }
 
 class ArrayWrapper {
-	var dom = {0..nElems};
+	var space = {0..nElems};
+	var dom = space dmapped Block(boundingBox=space);
 	var arr : [dom] int;
 	var lock$ : sync bool;
 }
