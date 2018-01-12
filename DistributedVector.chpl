@@ -16,6 +16,8 @@ use Collection;
 	The above allows us to ensure that those indexing already-allocated spots can continue
 	to do so without issue, as they will be writing to the same pointers in memory whether
 	they are using the new or old (transient state) version. 
+
+	TODO: UPDATE
 */
 
 config param DistVectorChunkSize = 1024;
@@ -81,14 +83,30 @@ class DistVectorImpl : CollectionImpl {
 	// Acquires read-access to the current instance. The index of the instance
 	// is returned so that the reader may release read-access for the appropriate instance.
 	proc acquireRead() : int {
+		// Note: Our read of the current index, although atomic, is subject to
+		// invalidation immediately after, and in particular in-between the time
+		// of the read and the increment of the reader count. It is possible for
+		// a writer change the current instance index between calls, resulting in 
+		// incrementing the wrong read counter, and after they await for all 
+		// readers to finish, leaving this reader as unaccounted for.
 		var idx = instanceIdx.read();
 		readCount[idx].add(1);
 
-		// Writer changed instance between calls...
+		// In the case that the writer did in fact make this change, we make a
+		// comparison (for measure of safety) here. Note that it is possible for 
+		// the instance index to change *after* our read, resulting in an 
+		// additional unneeded retry; this is okay in that retries are only 
+		// required when there is a write, and by definition RCU writes should 
+		// be infrequent enough to never cause livelock. If, however, the index
+		// is equivalent to what we have read, our increment of the read count
+		// will be accounted for as writes will switch the instance index *before*
+		// waiting on readers; hence, if we have read the correct instance and
+		// have incremented the correct count, the writer will be waiting on us.
 		if idx != instanceIdx.read() {
+			// Undo reader count
 			readCount[idx].sub(1);
 
-			// Slow-Path
+			// Slow-Path for a tighter-loop
 			while true {
 				idx = instanceIdx.read();
 				readCount[idx].add(1);
@@ -117,24 +135,22 @@ class DistVectorImpl : CollectionImpl {
 		writeLock.unlock();
 	}
 
-	inline proc currInstance ref {
-		var idx = instanceIdx.read();
-		return instances[idx];
-	}
-
 	// Requires writer privilege
+	// TODO: PROVE LINEARIZABILITY
 	inline proc switchInstance() {
 		// Update all instances...
 		coforall loc in Locales do on loc {
 			var _this = getPrivatizedThis;
-			var idx = _this.instanceIdx.write(!(_this.instanceIdx.read()));
-		}
-	}
+			var instIdx = _this.instanceIdx.read();
 
-	inline proc waitForReaders(idx : int) {
-		coforall loc in Locales do on loc {
-			var _this = getPrivatizedThis;
-			_this.readCount[idx].waitFor(0);
+			// Switch instance so newer readers will depopulate
+			// the older one (allowing for reader count to hit 0
+			// so we do not starve) and await readers on older
+			// instance before continuing. As the instance change
+			// will be made visible before we wait on readers, the
+			// reader is safely able to determine
+			_this.instanceIdx.write(!instIdx);
+			_this.readCount[instIdx].waitFor(0);
 		}
 	}
 
@@ -153,7 +169,7 @@ class DistVectorImpl : CollectionImpl {
     }
 
     proc ~DistVectorImpl() {
-    	for slot in currInstance.slots do delete slot;
+    	for slot in instances[instanceIdx.read()].slots do delete slot;
     }
 
     pragma "no doc"
@@ -172,6 +188,7 @@ class DistVectorImpl : CollectionImpl {
     }
 
     // Expands the array to the next chunk size.
+    // TODO: PROVE LINEARIZABILITY
     proc expand(size : int) {
     	acquireWrite();
 
@@ -188,7 +205,9 @@ class DistVectorImpl : CollectionImpl {
 			currLocId = (currLocId + 1) % numLocales;
 		}
 
-		// We append the allocated slot to the unused instance and set it as the current (cross-node update)
+		// We append the allocated slot to the unused instance 
+		// and set it as the current (cross-node update)
+		// TODO: Explain linearizability...
 		coforall loc in Locales do on loc {
 			var _this = getPrivatizedThis;
 			var oldInstIdx = _this.instanceIdx.read();
@@ -196,26 +215,40 @@ class DistVectorImpl : CollectionImpl {
 			ref oldInstance = _this.instances[oldInstIdx];
 			ref newInstance = _this.instances[newInstIdx];
 
-			// Take ever
+			// Take blocks present in original that is not in the current.
 			if oldInstance.slots.size > 1 {
 				var lo = newInstance.slots.size;
 				var hi = oldInstance.slots.size - 1;
 				newInstance.slots.push_back(oldInstance.slots[lo..hi]);
 			}
-			
+		
 			newInstance.slots.push_back(newSlots);
+			
+			// Switch instance so newer readers will depopulate
+			// the older one (allowing for reader count to hit 0
+			// so we do not starve) and await readers on older
+			// instance before continuing. As the instance change
+			// will be made visible before we wait on readers, the
+			// reader is safely able to determine
 			_this.instanceIdx.write(newInstIdx);
+
+			var waiting = _this.readCount[oldInstIdx].read();
+			if (waiting > 0) {
+				// writeln("Waiting on: ", waiting);
+				while _this.readCount[oldInstIdx].read() > 0 {
+					chpl_task_yield();
+				}
+			}
 		}
 
-		// Unblock readers, wait for them to finish, then release.
-		waitForReaders(instIdx);
 		releaseWrite();
     }
 
     // Indexes into the distributed vector
+    // TODO: PROVE LINEARIZABILITY
     proc this(idx : int) ref {
     	var rcIdx = acquireRead();
-    	ref instance = currInstance;
+    	ref instance = instances[rcIdx];
 
     	// If the index is currently allocated, then we simply
     	// fetch the actual element being referenced.
@@ -230,7 +263,7 @@ class DistVectorImpl : CollectionImpl {
 
     proc contains(elt: eltType): bool {
     	var rcIdx = acquireRead();
-    	var instance = currInstance;
+    	var instance = instances[rcIdx];
     	var found : atomic bool;
     	
     	forall slot in instance.slots {
@@ -250,7 +283,7 @@ class DistVectorImpl : CollectionImpl {
 
     proc size : int {
     	var rcIdx = acquireRead();
-    	var sz = currInstance.slots.size * DistVectorChunkSize;
+    	var sz = instances[rcIdx].slots.size * DistVectorChunkSize;
     	releaseRead(rcIdx);
     	return sz;
     }

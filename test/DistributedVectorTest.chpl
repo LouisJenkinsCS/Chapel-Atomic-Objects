@@ -8,7 +8,7 @@ forall ix in 0 .. #DistVectorChunkSize {
 }
 
 // Expand and test until we have DistVectorChunkSize^2
-for i in 1 .. DistVectorChunkSize {
+for i in 1 .. #(DistVectorChunkSize / 64) {
 	vector.expand(DistVectorChunkSize);
 
 	// Fill-in the part of the vector we have just allocated
@@ -22,5 +22,5 @@ for i in 1 .. DistVectorChunkSize {
 		assert(vector[ix] == ix);
 	}
 
-	if i % (DistVectorChunkSize / 10) == 0 then writeln("Passed: ", vector.size);
+	writeln("Passed: ", vector.size);
 }
