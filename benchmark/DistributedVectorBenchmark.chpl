@@ -41,7 +41,7 @@ proc main() {
     if i == 0 then continue;
     results[i] = timer.elapsed();
   }
-  writeln("[Vector]: ", (+ reduce results) / nTrials);
+  writeln("[Vector]: ", (nIterationsPerTask * here.maxTaskPar * numLocales) / ((+ reduce results) / nTrials));
 	
   var space = {0..nElems};
   var dom = space dmapped Block(boundingBox=space);
@@ -66,7 +66,7 @@ proc main() {
     if i == 0 then continue;
     results[i] = timer.elapsed();
   }
-  writeln("[Array]: ", (+ reduce results) / nTrials);
+  writeln("[Array]: ", (nIterationsPerTask * here.maxTaskPar * numLocales) / ((+ reduce results) / nTrials));
 
 	for i in 0 .. nTrials {
     timer.clear();
@@ -88,7 +88,7 @@ proc main() {
     if i == 0 then continue;
     results[i] = timer.elapsed();
   }
-  writeln("[Sync (Per Iteration) Array]: ", (+ reduce results) / nTrials);
+  writeln("[Sync (Per Iteration) Array]: ", (nIterationsPerTask * here.maxTaskPar * numLocales) / ((+ reduce results) / nTrials));
 
   for i in 0 .. nTrials {
     timer.clear();
@@ -110,5 +110,5 @@ proc main() {
     if i == 0 then continue;
     results[i] = timer.elapsed();
   }
-  writeln("[Sync (Per Task) Array]: ", (+ reduce results) / nTrials);
+  writeln("[Sync (Per Task) Array]: ", (nIterationsPerTask * here.maxTaskPar * numLocales) / ((+ reduce results) / nTrials));
 }
