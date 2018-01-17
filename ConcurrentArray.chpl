@@ -98,11 +98,12 @@ class ConcurrentArrayImpl {
 		// this makes livelock possible, but is extremely rare and writers are
 		// infrequent compared to readers.
 		do {
-			epoch = globalEpoch.read();
+			var currentEpoch = globalEpoch.read();
+			epoch = currentEpoch % 2;
 			epochReaders[epoch].add(1);
 
 			// Writers will change the global epoch prior to waiting on readers. 
-			if epoch != globalEpoch.read() {
+			if currentEpoch != globalEpoch.read() {
 				// Undo reader count, loop again.
 				epochReaders[epoch].sub(1);
 				continue;
@@ -172,7 +173,6 @@ class ConcurrentArrayImpl {
     	writeLock.lock();
 
 		// Allocate memory in a block-cyclic manner.
-		var epoch = globalEpoch.read();
 		var newSlots = alloc(size, nextLocaleAlloc, numLocales);
 		nextLocaleAlloc += newSlots.size;
 
@@ -180,7 +180,8 @@ class ConcurrentArrayImpl {
 		// and set it as the current (cross-node update)
 		coforall loc in Locales do on loc {
 			var _this = getPrivatizedThis;
-			var oldEpoch = _this.globalEpoch.read();
+			var currentEpoch = _this.globalEpoch.read();
+			var oldEpoch = currentEpoch % 2;
 			var newEpoch = !oldEpoch;
 			var oldSnapshot = _this.snapshot;
 			var newSnapshot = new ConcurrentArraySnapshot(eltType);
@@ -192,7 +193,7 @@ class ConcurrentArrayImpl {
 			
 			// Update epochs and wait for readers using old epoch
 			_this.snapshot = newSnapshot;
-			_this.globalEpoch.write(newEpoch);
+			_this.globalEpoch.write(currentEpoch + 1);
 			while(_this.epochReaders[oldEpoch].read() > 0) {
 				chpl_task_yield();
 			}
