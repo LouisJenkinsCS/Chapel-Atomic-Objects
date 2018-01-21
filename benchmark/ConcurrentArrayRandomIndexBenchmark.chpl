@@ -60,7 +60,7 @@ proc main() {
   }
   writeln("[Array]: ", "Op/Sec=", (nIterationsPerTask * here.maxTaskPar * numLocales) / ((+ reduce results) / nTrials), ", Time=", ((+ reduce results) / nTrials));
   csvTime += ", " + ((+ reduce results) / nTrials) : string;
-
+  /*
 	for i in 0 .. nTrials {
     timer.clear();
     timer.start();
@@ -83,6 +83,6 @@ proc main() {
   }
   writeln("[Sync Array]: ", "Op/Sec=", (nIterationsPerTask * here.maxTaskPar * numLocales) / ((+ reduce results) / nTrials), ", Time=", ((+ reduce results) / nTrials));
   csvTime += ", " + ((+ reduce results) / nTrials) : string;
-
+  */
   writeln(csvTime);
 }
