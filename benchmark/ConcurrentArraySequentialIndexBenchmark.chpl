@@ -6,6 +6,7 @@ use BlockDist;
 config param nElems = 1024 * 1024;
 config param nIterationsPerTask = 1024 * 1024;
 config param nTrials = 4;
+config param runSyncArray = true;
 
 proc main() {
   var csvTime : string;
@@ -59,27 +60,29 @@ proc main() {
   writeln("[Array]: ", "Op/Sec=", (nIterationsPerTask * here.maxTaskPar * numLocales) / ((+ reduce results) / nTrials), ", Time=", ((+ reduce results) / nTrials));
   csvTime += ", " + ((+ reduce results) / nTrials) : string;
 
-  for i in 0 .. nTrials {
-    timer.clear();
-    timer.start();
-    coforall loc in Locales do on loc {
-      coforall tid in 1..here.maxTaskPar {
-        for ix in 1 .. nIterationsPerTask {
-          lock$ = true;
-          var idx = ix % nElems;
-          arr[idx] = idx;
-          lock$;
+  if runSyncArray {
+    for i in 0 .. nTrials {
+      timer.clear();
+      timer.start();
+      coforall loc in Locales do on loc {
+        coforall tid in 1..here.maxTaskPar {
+          for ix in 1 .. nIterationsPerTask {
+            lock$ = true;
+            var idx = ix % nElems;
+            arr[idx] = idx;
+            lock$;
+          }
         }
       }
-    }
-    timer.stop();
+      timer.stop();
 
-    // Discard first run...
-    if i == 0 then continue;
-    results[i] = timer.elapsed();
-  } 
-  writeln("[Sync Array]: ", "Op/Sec=", (nIterationsPerTask * here.maxTaskPar * numLocales) / ((+ reduce results) / nTrials), ", Time=", ((+ reduce results) / nTrials));
-  csvTime += ", " + ((+ reduce results) / nTrials) : string;
-
+      // Discard first run...
+      if i == 0 then continue;
+      results[i] = timer.elapsed();
+    } 
+    writeln("[Sync Array]: ", "Op/Sec=", (nIterationsPerTask * here.maxTaskPar * numLocales) / ((+ reduce results) / nTrials), ", Time=", ((+ reduce results) / nTrials));
+    csvTime += ", " + ((+ reduce results) / nTrials) : string;
+  }
+  
   writeln(csvTime);
 }
