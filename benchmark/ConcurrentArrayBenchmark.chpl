@@ -8,6 +8,8 @@ config param nIterationsPerTask = 1024 * 1024;
 config param nTrials = 4;
 
 proc main() {
+  var csvTime : string;
+
   var array = new ConcurrentArray(int);
   array.expand(nElems);
   var timer = new Timer();
@@ -31,7 +33,8 @@ proc main() {
     results[i] = timer.elapsed();
   }
   writeln("[Concurrent Array]: ", "Op/Sec=", (nIterationsPerTask * here.maxTaskPar * numLocales) / ((+ reduce results) / nTrials), ", Time=", ((+ reduce results) / nTrials));
-	
+	csvTime += ((+ reduce results) / nTrials) : string;
+
   var space = {0..nElems};
   var dom = space dmapped Block(boundingBox=space);
   var arr : [dom] int;
@@ -56,6 +59,7 @@ proc main() {
     results[i] = timer.elapsed();
   }
   writeln("[Array]: ", "Op/Sec=", (nIterationsPerTask * here.maxTaskPar * numLocales) / ((+ reduce results) / nTrials), ", Time=", ((+ reduce results) / nTrials));
+  csvTime += ", " + ((+ reduce results) / nTrials) : string;
 
 	for i in 0 .. nTrials {
     timer.clear();
@@ -78,4 +82,7 @@ proc main() {
     results[i] = timer.elapsed();
   }
   writeln("[Sync Array]: ", "Op/Sec=", (nIterationsPerTask * here.maxTaskPar * numLocales) / ((+ reduce results) / nTrials), ", Time=", ((+ reduce results) / nTrials));
+  csvTime += ", " + ((+ reduce results) / nTrials) : string;
+
+  writeln(csvTime);
 }
