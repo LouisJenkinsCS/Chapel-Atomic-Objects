@@ -30,7 +30,7 @@ proc main() {
     if i == 0 then continue;
     results[i] = timer.elapsed();
   }
-  writeln("[ConcurrentArray]: ", (nIterationsPerTask * here.maxTaskPar * numLocales) / ((+ reduce results) / nTrials));
+  writeln("[Concurrent Array]: ", "Op/Sec=", (nIterationsPerTask * here.maxTaskPar * numLocales) / ((+ reduce results) / nTrials), ", Time=", ((+ reduce results) / nTrials));
 	
   var space = {0..nElems};
   var dom = space dmapped Block(boundingBox=space);
@@ -55,7 +55,7 @@ proc main() {
     if i == 0 then continue;
     results[i] = timer.elapsed();
   }
-  writeln("[Array]: ", (nIterationsPerTask * here.maxTaskPar * numLocales) / ((+ reduce results) / nTrials));
+  writeln("[Array]: ", "Op/Sec=", (nIterationsPerTask * here.maxTaskPar * numLocales) / ((+ reduce results) / nTrials), ", Time=", ((+ reduce results) / nTrials));
 
 	for i in 0 .. nTrials {
     timer.clear();
@@ -77,27 +77,5 @@ proc main() {
     if i == 0 then continue;
     results[i] = timer.elapsed();
   }
-  writeln("[Sync (Per Iteration) Array]: ", (nIterationsPerTask * here.maxTaskPar * numLocales) / ((+ reduce results) / nTrials));
-
-  for i in 0 .. nTrials {
-    timer.clear();
-    timer.start();
-    coforall loc in Locales do on loc {
-      coforall tid in 1..here.maxTaskPar {
-        var randStream = makeRandomStream(uint);
-        lock$ = true;
-        for ix in 1 .. nIterationsPerTask {
-          var idx = ((randStream.getNext() % max(nElems, 1) : uint)) : int;
-          arr[idx] = idx;
-        }
-        lock$;
-      }
-    }
-    timer.stop();
-
-    // Discard first run...
-    if i == 0 then continue;
-    results[i] = timer.elapsed();
-  }
-  writeln("[Sync (Per Task) Array]: ", (nIterationsPerTask * here.maxTaskPar * numLocales) / ((+ reduce results) / nTrials));
+  writeln("[Sync Array]: ", "Op/Sec=", (nIterationsPerTask * here.maxTaskPar * numLocales) / ((+ reduce results) / nTrials), ", Time=", ((+ reduce results) / nTrials));
 }
