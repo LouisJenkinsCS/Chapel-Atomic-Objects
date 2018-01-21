@@ -1,0 +1,4 @@
+plot 'results.csv' using 1:2:xtic(1) with lines title 'Concurrent Array', 'results.csv' using 1:3:xtic(1) with lines title 'Unsynchronized Array', 'results.csv' using 1:4:xtic(1) with lines title 'Synchronized Array'
+set title 'Random Indexing (1024 Elements per Task)'
+set ylabel 'time (seconds)'
+set xlabel 'tasks'
