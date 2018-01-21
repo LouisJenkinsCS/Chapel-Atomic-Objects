@@ -10,9 +10,16 @@ use SharedObject;
 */
 
 /*
-
+	Size of each contiguous chunk.
 */ 
 config param ConcurrentArrayChunkSize = 1024;
+
+/*
+	Whether or not we perform read barriers. This can be set
+	to false for niche performance testing where you know there
+	will be no concurrent writer.
+*/
+config param ConcurrentArrayReadBarriers = true;
 
 /*
 	Reference Counting Mechanism
@@ -93,30 +100,36 @@ class ConcurrentArrayImpl {
 	proc rcu_read_lock() : int {
 		var epoch : int;
 
-		// It is possible for a writer to change the current epoch between 
-		// our read and increment, so we must loop until we succeed. Note that
-		// this makes livelock possible, but is extremely rare and writers are
-		// infrequent compared to readers.
-		do {
-			var currentEpoch = globalEpoch.read();
-			epoch = currentEpoch % 2;
-			epochReaders[epoch].add(1);
+		if ConcurrentArrayReadBarriers {
+			
 
-			// Writers will change the global epoch prior to waiting on readers. 
-			if currentEpoch != globalEpoch.read() {
-				// Undo reader count, loop again.
-				epochReaders[epoch].sub(1);
-				continue;
-			}
-		} while (false);
+			// It is possible for a writer to change the current epoch between 
+			// our read and increment, so we must loop until we succeed. Note that
+			// this makes livelock possible, but is extremely rare and writers are
+			// infrequent compared to readers.
+			do {
+				var currentEpoch = globalEpoch.read();
+				epoch = currentEpoch % 2;
+				epochReaders[epoch].add(1);
 
+				// Writers will change the global epoch prior to waiting on readers. 
+				if currentEpoch != globalEpoch.read() {
+					// Undo reader count, loop again.
+					epochReaders[epoch].sub(1);
+					continue;
+				}
+			} while (false);
+		}
+		
 		return epoch;
 	}
 
 	// Releases read-access to the current instance. The index must be the same
 	// that is obtained from the 'acquireRead' read-barrier 
 	proc rcu_read_unlock(idx : int) {
-		epochReaders[idx].sub(1);
+		if ConcurrentArrayReadBarriers {
+			epochReaders[idx].sub(1);
+		}
 	}
 
 	proc ConcurrentArrayImpl(type eltType, lock : ConcurrentArrayWriterLock, initialCap) {
