@@ -19,7 +19,7 @@ config param ConcurrentArrayChunkSize = 1024;
 	to false for niche performance testing where you know there
 	will be no concurrent writer.
 */
-config param ConcurrentArrayReadBarriers = true;
+config param ConcurrentArrayUseQSBR = false;
 
 /*
 	Reference Counting Mechanism
@@ -100,7 +100,7 @@ class ConcurrentArrayImpl {
 	proc rcu_read_lock() : int {
 		var epoch : int;
 
-		if ConcurrentArrayReadBarriers {
+		if !ConcurrentArrayUseQSBR {
 			
 
 			// It is possible for a writer to change the current epoch between 
@@ -127,7 +127,7 @@ class ConcurrentArrayImpl {
 	// Releases read-access to the current instance. The index must be the same
 	// that is obtained from the 'acquireRead' read-barrier 
 	proc rcu_read_unlock(idx : int) {
-		if ConcurrentArrayReadBarriers {
+		if !ConcurrentArrayUseQSBR {
 			epochReaders[idx].sub(1);
 		}
 	}
@@ -206,13 +206,20 @@ class ConcurrentArrayImpl {
 			
 			// Update epochs and wait for readers using old epoch
 			_this.snapshot = newSnapshot;
-			_this.globalEpoch.write(currentEpoch + 1);
-			while(_this.epochReaders[oldEpoch].read() > 0) {
-				chpl_task_yield();
-			}
+			if ConcurrentArrayUseQSBR {
+				extern proc chpl_qsbr_defer_deletion(c_void_ptr, int, bool);
+				var storage = c_malloc(c_void_ptr, 1);
+				storage[0] = oldSnapshot : c_void_ptr;
+				chpl_qsbr_defer_deletion(storage : c_void_ptr, 1, true);
+			} else {
+				_this.globalEpoch.write(currentEpoch + 1);
+				while(_this.epochReaders[oldEpoch].read() > 0) {
+					chpl_task_yield();
+				}
 
-			// At this point, no other task will be using this, so delete it
-			delete oldSnapshot;
+				// At this point, no other task will be using this, so delete it
+				delete oldSnapshot;
+			}
 		}
 
 		writeLock.unlock();
