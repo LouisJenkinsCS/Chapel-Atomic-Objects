@@ -207,10 +207,8 @@ class ConcurrentArrayImpl {
 			// Update epochs and wait for readers using old epoch
 			_this.snapshot = newSnapshot;
 			if ConcurrentArrayUseQSBR {
-				extern proc chpl_qsbr_defer_deletion(c_void_ptr, int, bool);
-				var storage = c_malloc(c_void_ptr, 1);
-				storage[0] = oldSnapshot : c_void_ptr;
-				chpl_qsbr_defer_deletion(storage : c_void_ptr, 1, true);
+				extern proc chpl_qsbr_defer_deletion(c_void_ptr);
+				chpl_qsbr_defer_deletion(oldSnapshot : c_void_ptr);
 			} else {
 				_this.globalEpoch.write(currentEpoch + 1);
 				while(_this.epochReaders[oldEpoch].read() > 0) {
