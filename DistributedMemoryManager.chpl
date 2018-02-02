@@ -181,5 +181,4 @@ proc main() {
 	}
 
 	coforall loc in Locales do on loc do dmm.checkpoint();
-	writeln("Checkpoint, List: ", dmm.list : c_void_ptr : uint(64));
 }
