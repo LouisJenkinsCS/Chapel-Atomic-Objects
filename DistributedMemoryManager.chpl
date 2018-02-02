@@ -5,6 +5,11 @@ class DistributedMemoryManagerReferenceCounter {
 
     proc deinit() {
     	var _value = chpl_getPrivatizedCopy(DistributedMemoryManagerImpl, pid);
+
+    	// Delete all epochs
+    	delete _value.master;
+    	for arr in _value.slave do delete _value.slave;
+
     	// Delete the per-node data
 		coforall loc in Locales do on loc do {
 			delete chpl_getPrivatizedCopy(DistributedMemoryManagerImpl, pid);
@@ -14,10 +19,11 @@ class DistributedMemoryManagerReferenceCounter {
 
 record DistributedMemoryManager {
 	var pid : int = -1;
-	var refCount : Shared(DistributedMemoryManagerImpl);
+	var refCount : Shared(DistributedMemoryManagerReferenceCounter);
 
 	proc DistributedMemoryManager() {
 		pid = (new DistributedMemoryManagerImpl()).pid;
+		refCount = new Shared(new DistributedMemoryManagerReferenceCounter(pid=pid));
 	}
 
 	proc _value {
@@ -57,6 +63,15 @@ class DistributedMemoryManagerImpl {
 		this.master = other.master;
 		this.slave = other.slave;
 		this.pid = other.pid;
+	}
+
+	proc ~DistributedMemoryManagerImpl() {
+		while (list) {
+			var tmp = list;
+			list = list.next;
+			delete tmp.obj;
+			delete tmp;
+		}
 	}
 
     proc dsiPrivatize(privData) {
@@ -108,6 +123,10 @@ class DistributedMemoryManagerImpl {
     	listLock$;
     }
 
+    proc publish() {
+    	localSlave.epoch.write(master.epoch.fetchAdd(1) + 1);
+    }
+
     proc deleteBefore(epoch) {
     	var head : DeferNode;
     	listLock$ = true;
@@ -157,7 +176,10 @@ proc main() {
 	forall a in arr {
 		on Locales[locid % numLocales] {
 			dmm.reclaim(a);
-			dmm.checkpoint();
+			dmm.publish();
 		}
 	}
+
+	coforall loc in Locales do on loc do dmm.checkpoint();
+	writeln("Checkpoint, List: ", dmm.list : c_void_ptr : uint(64));
 }

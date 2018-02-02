@@ -57,6 +57,7 @@ record ConcurrentArray {
 
 	proc ConcurrentArray(type eltType, initialCap = 0) {
 		pid = (new ConcurrentArrayImpl(eltType, new ConcurrentArrayWriterLock(), initialCap)).pid;
+		_rc = new Shared(new ConcurrentArrayRC(eltType, _pid=pid));
 	}
 
 	proc _value {
