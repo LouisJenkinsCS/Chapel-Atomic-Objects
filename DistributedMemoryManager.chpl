@@ -173,9 +173,9 @@ proc main() {
 		} 
 	}
 
-	var locid = 0;
+	var locid : atomic int(64);
 	forall a in arr {
-		on Locales[locid % numLocales] {
+		on Locales[locid.fetchAdd(1) % numLocales] {
 			dmm.reclaim(a);
 			dmm.publish();
 		}
