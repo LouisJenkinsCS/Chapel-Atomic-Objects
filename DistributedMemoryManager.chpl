@@ -23,7 +23,8 @@ record DistributedMemoryManager {
 
 	proc DistributedMemoryManager() {
 		pid = (new DistributedMemoryManagerImpl()).pid;
-		refCount = new Shared(new DistributedMemoryManagerReferenceCounter(pid=pid));
+		// Issue with reference count on multiple locales... Locale #0 ends, but others do not
+		// refCount = new Shared(new DistributedMemoryManagerReferenceCounter(pid=pid));
 	}
 
 	proc _value {
