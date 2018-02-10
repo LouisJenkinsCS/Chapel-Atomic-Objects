@@ -183,7 +183,8 @@ class ConcurrentArrayImpl {
     }
 
     // Expands the array to the next nearest chunk size.
-    proc expand(size : int) {
+    // Returns the new size as an interval (start, finish)
+    proc expand(size : int) : (int, int) {
     	writeLock.lock();
 
 		// Allocate memory in a block-cyclic manner.
@@ -221,7 +222,9 @@ class ConcurrentArrayImpl {
 			}
 		}
 
+		var retval = (0, (snapshot.chunks.size * ConcurrentArrayChunkSize) - 1);
 		writeLock.unlock();
+		return retval;
     }
 
     // Indexes into the distributed vector
