@@ -83,7 +83,7 @@ proc main() {
       if i == 0 then continue;
       results[i] = timer.elapsed();
     }
-    writeln("[Sync Array]: ", "Op/Sec=", (nIterationsPerTask * here.maxTaskPar * numLocales) / ((+ reduce results) / nTrials), ", Time=", ((+ reduce results) / nTrials));
+    writeln("[RWSync Array]: ", "Op/Sec=", (nIterationsPerTask * here.maxTaskPar * numLocales) / ((+ reduce results) / nTrials), ", Time=", ((+ reduce results) / nTrials));
     csvTime += ", " + ((+ reduce results) / nTrials) : string;
   }
   

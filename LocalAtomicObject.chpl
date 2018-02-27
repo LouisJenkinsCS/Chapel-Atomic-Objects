@@ -3,6 +3,10 @@ record LocalAtomicObject {
   type atomicType = uint(64);
   var _atomicVar: atomic atomicType;
 
+  proc LocalAtomicObject(type objType) {
+    _atomicVar.write(0);
+  }
+
   inline proc read() {
     return __primitive("cast", objType, _atomicVar.read());
   }
@@ -32,17 +36,17 @@ record LocalAtomicObject {
   }
 
   // handle wrong types
-  proc write(newObj) {
+  inline proc write(newObj) {
     compilerError("Incompatible object type in LocalAtomicObject.write: ",
         newObj.type);
   }
 
-  proc compareExchange(expectedObj, newObj) {
+  inline proc compareExchange(expectedObj, newObj) {
     compilerError("Incompatible object type in LocalAtomicObject.compareExchange: (",
         expectedObj.type, ",", newObj.type, ")");
   }
 
-  proc exchange(newObj) {
+  inline proc exchange(newObj) {
     compilerError("Incompatible object type in LocalAtomicObject.exchange: ",
         newObj.type);
   }

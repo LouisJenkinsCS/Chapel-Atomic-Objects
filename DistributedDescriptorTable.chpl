@@ -1,6 +1,6 @@
 use ConcurrentArray;
 use SharedObject;
-use DistributedBag;
+use LocalAtomicObject;
 
 /*
 	Reference Counting Mechanism
@@ -35,12 +35,10 @@ record DistributedDescriptorTable {
 
 	proc DistributedDescriptorTable(type objType, initialCap = 0) {
 		pid = (new DistributedDescriptorTableImpl(objType, initialCap)).pid;
-		writeln("Table pid: ", pid);
 		_rc = new Shared(new DistributedDescriptorTableReferenceCount(objType, _pid=pid));
 	}
 
 	proc _value {
-		writeln("Retrieved pid: ", pid);
 		if pid == -1 {
 			halt("DistributedDescriptorTable is uninitialized...");
 		}
@@ -51,21 +49,25 @@ record DistributedDescriptorTable {
 	forwarding _value;
 }
 
+class StackNode {
+	type eltType;
+	var elt : eltType;
+	var next : StackNode(eltType);
+}
+
 class DistributedDescriptorTableImpl {
 	type objType;
 	var pid : int = -1;
 
 	// TODO: Investigate default constructor work performed...
 	var descriptorTable : ConcurrentArray(objType);
-	var recycledDescriptors : DistBag(int);
+	var recycledDescriptors : LocalAtomicObject(StackNode(int));
 
 	proc DistributedDescriptorTableImpl(type objType) {
-		this.recycledDescriptors = new DistBag(int, targetLocales = Locales[here.id .. here.id]);
 		this.pid = _newPrivatizedClass(this);
 	}
 
 	proc DistributedDescriptorTableImpl(other, privData, type objType = other.objType) {
-		this.recycledDescriptors = new DistBag(int, targetLocales = Locales[here.id .. here.id]);
 		this.descriptorTable = other.descriptorTable;
 		this.pid = other.pid;
 	}
@@ -86,20 +88,56 @@ class DistributedDescriptorTableImpl {
       return chpl_getPrivatizedClass(this.type, this.pid);
     }
 
+    proc getRecycledDescriptor() : (bool, int) {
+    	while true {
+	    	var head = recycledDescriptors.read();
+	    	if (head == nil) {
+	    		return (false, 0);
+	    	}
+			if (recycledDescriptors.compareExchange(head, head.next)) {
+				// TODO: Use QSBR for memory reclamation once accepted...
+				return (true, head.elt);
+			}
+    	}
+
+    	return (false, 0);
+    }
+
     // Inserts the passed object into an empty space in the table; if one is not found
     // the table will be reallocated. This is concurrent safe, but concurrent accesses
     // while the table is out of space may result in repeated resize operations.
     proc register(obj : objType) : int {
     	// Find a descriptor
-    	var (hasDescr, descr) = recycledDescriptors.bag.remove();
+    	var (hasDescr, descr) = getRecycledDescriptor();
 
     	if (!hasDescr) {
     		// If we cannot recycle any descriptors, grow the table...
 	    	var (start, end) = descriptorTable.expand(ConcurrentArrayChunkSize); 
 	    	
 	    	// Recycle rest of descriptors, keep one for self...
-	    	// TODO add a real bulk add for this
-	    	recycledDescriptors.bag.add((end - ConcurrentArrayChunkSize) .. end - 1);	
+    	
+	    	var head : StackNode(int);
+	    	var tail : StackNode(int);
+	    	for descr in (end - ConcurrentArrayChunkSize) .. end - 1 {
+    			var node = new StackNode(int, elt=descr);
+    			if head == nil {
+    				head = node;
+    				tail = head;
+    			} else {
+    				node.next = head;
+    				head = node;
+    			}
+	    	}
+
+	    	while true {
+	    		var oldHead = recycledDescriptors.read();
+	    		tail.next = oldHead;
+	    		if recycledDescriptors.compareExchange(oldHead, head) {
+	    			break;
+	    		}
+	    	}
+
+	    	// Claim last descriptor
 	    	descr = end;
     	}
 
@@ -110,7 +148,14 @@ class DistributedDescriptorTableImpl {
     }
 
     proc unregister(descr : int) {
-    	recycledDescriptors.add(descr);
+    	var node = new StackNode(int, elt=descr);
+    	while true {
+    		var oldHead = recycledDescriptors.read();
+    		node.next = oldHead;
+    		if recycledDescriptors.compareExchange(oldHead, node) {
+    			break;
+    		}
+    	}
     }
 
     proc this(idx : int) ref {
@@ -127,14 +172,8 @@ proc main() {
 	class O {
 		var descr : int;
 	}
-	var x = 0;
 	var nIterations = 1024 * 1024;
 	var dt : DistributedDescriptorTable(O) = new DistributedDescriptorTable(O);
-	writeln("Done initializing...");
-
-
-	writeln(dt.recycledDescriptors._pid);
-	writeln(dt.pid);
 
 	coforall loc in Locales do on loc {
 		forall 1 .. nIterations {
