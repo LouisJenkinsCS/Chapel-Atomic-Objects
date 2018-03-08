@@ -1,3 +1,4 @@
+use Time;
 use Collection;
 use LocalAtomicObject;
 
@@ -34,7 +35,7 @@ class CCSynchNode {
 
 class PriorityQueue : CollectionImpl {
 	var comparator : func(eltType, eltType, eltType);
-	var dom = 0..#PRIORITY_QUEUE_DEFAULT_SIZE;
+	var dom = {0..#PRIORITY_QUEUE_DEFAULT_SIZE};
 	var arr : [dom] eltType;
 	var size : int;
 
@@ -104,8 +105,8 @@ class PriorityQueue : CollectionImpl {
         			var idx = size;
         			
         			// Resize if needed
-        			if idx >= arr.size {
-        				dom = 0..(((dom.high * 1.5) : int) - 1);
+        			if idx >= dom.last {
+        				dom = {0..(((dom.last * 1.5) : int) - 1)};
         			}
 
         			// Insert
@@ -213,7 +214,33 @@ class PriorityQueue : CollectionImpl {
 }
 
 proc main() {
+	const nTrials = 3;
+	const nOperations = 1024 * 1024; 
 	var pq = new PriorityQueue(int, lambda(x:int, y:int) { return if x > y then x else y; });
-	forall i in 1..1000 do pq.add(i);
-	for i in 1..1000 do assert(pq.remove()[2] == (1000 - (i - 1)));
+	var t : Timer();
+
+	for maxTaskPar in 1..here.maxTaskPar by 2 {
+		var trialTimes : [0..nTrials] real;
+		for trial in 0..nTrials {
+			t.start();
+			// Concurrent Add Phase
+			coforall tid in 0..#maxTaskPar {
+				var iterations = nOperations / maxTaskPar; 
+				var start = iterations * tid;
+				var end = iterations * (tid + 1);
+				for i in start..#end do pq.add(i);		
+			}
+			// Concurrent Remove Phase
+			coforall tid in 0..#maxTaskPar {
+				var iterations = nOperations / maxTaskPar; 
+				var start = iterations * tid;
+				var end = iterations * (tid + 1);
+				for i in start..#end do pq.remove();
+			}
+			t.stop();
+			trialTimes[trial] = t.elapsed();
+		}
+
+		writeln("[", maxTaskPar, " Threads]: ", + reduce trialTimes / nTrials**2);
+	}
 }
