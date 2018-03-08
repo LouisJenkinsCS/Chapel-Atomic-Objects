@@ -39,6 +39,10 @@ class PriorityQueue : CollectionImpl {
 	var arr : [dom] eltType;
 	var size : int;
 
+	// Used in sync versions
+	var lock$ : sync bool;
+
+	// Used in CCSynch versions
 	var ccWaitList : LocalAtomicObject(CCSynchNode(eltType));
 
 	proc PriorityQueue(type eltType, comparator : func(eltType, eltType, eltType)) {
@@ -211,13 +215,63 @@ class PriorityQueue : CollectionImpl {
 	inline proc getParent(x) {
 		return (x - 1) / 2;
 	}
+
+	proc syncAdd(elt : eltType) {
+		lock$ = true;
+		var idx = size;
+        			
+		// Resize if needed
+		if idx >= dom.last {
+			dom = {0..(((dom.last * 1.5) : int) - 1)};
+		}
+
+		// Insert
+		arr[idx] = elt;
+		size += 1;
+
+		// Rebalance
+		if idx > 0 {
+			var child = arr[idx];
+			var parent = arr[getParent(idx)];
+
+			// Heapify Up
+			while idx != 0 && comparator(child, parent) == child {
+				var tmp = arr[idx];
+				arr[idx] = arr[getParent(idx)];
+				arr[getParent(idx)] = tmp;
+
+				idx = getParent(idx);
+				child = arr[idx];
+				if idx == 0 then break;
+				parent = arr[getParent(idx)];
+			}
+		}
+
+		lock$;
+	}
+
+	proc syncRemove() {
+
+		lock$ =true;
+
+		if size != 0 {
+			var tmp = arr[0];
+			arr[0] = arr[size - 1];
+			arr[size - 1] = tmp;
+			size -= 1;
+
+			heapify(0);
+		}
+
+		lock$;
+	}
 }
 
 config var weakScaling = false;
+config var nTrials = 4;
+config var nOperations = 1024 * 1024;
 
-proc main() {
-	const nTrials = 1;
-	const nOperations = 1024 * 1024; 
+proc main() { 
 	var pq = new PriorityQueue(int, lambda(x:int, y:int) { return if x > y then x else y; });
 	var t : Timer();
 
@@ -247,7 +301,37 @@ proc main() {
 			t.clear();
 		}
 
-		writeln("[", maxTaskPar, " Threads]: ", 
-			(if weakScaling then nOperations * maxTaskPar else nOperations) / (+ reduce trialTimes / nTrials**2));
+		writeln("CCSynch ~ [", maxTaskPar, " Threads]: ", 
+			(if weakScaling then 2 * nOperations * maxTaskPar else 2 * nOperations) / (+ reduce trialTimes / nTrials**2));
+	}
+
+	for maxTaskPar in 1..here.maxTaskPar {
+		if maxTaskPar != 1 && maxTaskPar % 2 != 0 then continue;
+		var trialTimes : [0..#nTrials] real;
+		for trial in 0..#nTrials {
+			t.start();
+			// Concurrent Add Phase
+			coforall tid in 0..#maxTaskPar {
+				var iterations = nOperations / maxTaskPar; 
+				var start = iterations * tid;
+				var end = iterations * (tid + 1);
+				if !weakScaling then for i in start..#end do pq.syncAdd(i);
+				else for i in 0..#nOperations do pq.syncAdd(i);
+			}
+			// Concurrent Remove Phase
+			coforall tid in 0..#maxTaskPar {
+				var iterations = nOperations / maxTaskPar; 
+				var start = iterations * tid;
+				var end = iterations * (tid + 1);
+				if !weakScaling then for i in start..#end do pq.syncRemove();
+				else for i in 0..#nOperations do pq.syncRemove();
+			}
+			t.stop();
+			trialTimes[trial] = t.elapsed();
+			t.clear();
+		}
+
+		writeln("Sync ~ [", maxTaskPar, " Threads]: ", 
+			(if weakScaling then 2 * nOperations * maxTaskPar else 2 * nOperations) / (+ reduce trialTimes / nTrials**2));
 	}
 }
