@@ -7,6 +7,11 @@ record LocalAtomicObject {
     _atomicVar.write(0);
   }
 
+  inline proc getAddr(obj : objType) : atomicType {
+    if __primitive("is wide pointer", obj) then return __primitive("cast", atomicType, __primitive("_wide_get_addr", obj));
+    else return __primitive("cast", atomicType, obj);
+  }
+
   inline proc read() {
     return __primitive("cast", objType, _atomicVar.read());
   }
@@ -16,14 +21,14 @@ record LocalAtomicObject {
       if __primitive("is wide pointer", newObj) || __primitive("is wide pointer", expectedObj) then
         halt("Attempt to write a wide pointer into LocalAtomicObject");
 
-    return _atomicVar.compareExchangeStrong(__primitive("cast", atomicType, expectedObj), __primitive("cast", atomicType, newObj));
+    return _atomicVar.compareExchangeStrong(getAddr(expectedObj), getAddr(newObj));
   }
 
   inline proc write(newObj:objType) {
     if boundsChecking then
       if __primitive("is wide pointer", newObj) then
         halt("Attempt to write a wide pointer into LocalAtomicObject");
-    _atomicVar.write(__primitive("cast", atomicType, newObj));
+    _atomicVar.write(getAddr(newObj));
   }
 
   inline proc exchange(newObj:objType) {
@@ -31,7 +36,7 @@ record LocalAtomicObject {
       if __primitive("is wide pointer", newObj) then
         halt("Attempt to exchange a wide pointer into LocalAtomicObject");
 
-    const curObj = _atomicVar.exchange(__primitive("cast", atomicType, newObj));
+    const curObj = _atomicVar.exchange(getAddr(newObj));
     return __primitive("cast", objType, curObj);
   }
 
