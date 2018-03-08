@@ -216,15 +216,15 @@ class PriorityQueue : CollectionImpl {
 config var weakScaling = false;
 
 proc main() {
-	const nTrials = 3;
+	const nTrials = 1;
 	const nOperations = 1024 * 1024; 
 	var pq = new PriorityQueue(int, lambda(x:int, y:int) { return if x > y then x else y; });
 	var t : Timer();
 
 	for maxTaskPar in 1..here.maxTaskPar {
 		if maxTaskPar != 1 && maxTaskPar % 2 != 0 then continue;
-		var trialTimes : [0..nTrials] real;
-		for trial in 0..nTrials {
+		var trialTimes : [0..#nTrials] real;
+		for trial in 0..#nTrials {
 			t.start();
 			// Concurrent Add Phase
 			coforall tid in 0..#maxTaskPar {
@@ -247,6 +247,7 @@ proc main() {
 			t.clear();
 		}
 
-		writeln("[", maxTaskPar, " Threads]: ", + reduce trialTimes / nTrials**2);
+		writeln("[", maxTaskPar, " Threads]: ", 
+			(if weakScaling then nOperations * maxTaskPar else nOperations) / (+ reduce trialTimes / nTrials**2));
 	}
 }
