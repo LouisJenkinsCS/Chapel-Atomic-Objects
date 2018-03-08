@@ -213,13 +213,16 @@ class PriorityQueue : CollectionImpl {
 	}
 }
 
+config var weakScaling = false;
+
 proc main() {
 	const nTrials = 3;
 	const nOperations = 1024 * 1024; 
 	var pq = new PriorityQueue(int, lambda(x:int, y:int) { return if x > y then x else y; });
 	var t : Timer();
 
-	for maxTaskPar in 1..here.maxTaskPar by 2 {
+	for maxTaskPar in 1..here.maxTaskPar {
+		if maxTaskPar != 1 && maxTaskPar % 2 != 0 then continue;
 		var trialTimes : [0..nTrials] real;
 		for trial in 0..nTrials {
 			t.start();
@@ -228,17 +231,20 @@ proc main() {
 				var iterations = nOperations / maxTaskPar; 
 				var start = iterations * tid;
 				var end = iterations * (tid + 1);
-				for i in start..#end do pq.add(i);		
+				if !weakScaling then for i in start..#end do pq.add(i);
+				else for i in 0..#nOperations do pq.add(i);
 			}
 			// Concurrent Remove Phase
 			coforall tid in 0..#maxTaskPar {
 				var iterations = nOperations / maxTaskPar; 
 				var start = iterations * tid;
 				var end = iterations * (tid + 1);
-				for i in start..#end do pq.remove();
+				if !weakScaling then for i in start..#end do pq.remove();
+				else for i in 0..#nOperations do pq.remove();
 			}
 			t.stop();
 			trialTimes[trial] = t.elapsed();
+			t.clear();
 		}
 
 		writeln("[", maxTaskPar, " Threads]: ", + reduce trialTimes / nTrials**2);
