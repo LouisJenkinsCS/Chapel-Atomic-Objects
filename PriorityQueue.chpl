@@ -11,6 +11,65 @@ use LocalAtomicObject;
 	concurrency, as well as Epoch-Based Reclamation and
 	recycling memory (I.E RCUArray) to allow resizing
 	of the data structure.
+
+	The idea is this...
+
+		Add(elt):
+			var stm = manager.getDescriptor();
+			// Insert...
+			var insertSuccessful = false;
+			var idx : int;
+			while !insertSuccessful {
+				try! {
+					stm.begin();
+					
+					// Attempt to resize if too large
+					idx = stm.read(this.size);
+					var currData = stm.read(data);
+					if idx >= stm.read(currData.cap) {
+						this.expand();
+					}
+					
+					data[idx] = elt;
+
+					stm.commit();
+					insertSuccessful = true;
+				} catch ex : STMAbort {
+					// Try again...	
+				}
+			}
+
+			// Rebalance
+			var rebalanceSuccessful = false;
+			while !rebalanceSuccessful {
+				try! {
+					stm.begin();
+
+					var arr = stm.read(data);
+					if idx < stm.read(arr.cap) {
+						var child = stm.read(arr[idx]);
+						var parent = stm.read(arr[getParent(idx)]);
+
+						// Heapify Up
+						while idx != 0 && comparator(child, parent) == child {
+							var tmp = stm.read(arr[idx]);
+							stm.write(arr[idx], stm.read(arr[getParent(idx)]));
+							stm.write(arr[getParent(idx)], tmp);
+
+							idx = getParent(idx);
+							child = stm.read(arr[idx]);
+							if idx == 0 then break;
+							parent = stm.read(arr[getParent(idx)]);
+						}
+					}
+					
+					stm.commit();
+					rebalanceSuccessful = true;
+				} catch ex : STMAbort {
+					// Try again...
+				}
+			}
+	
 */
 
 config param PRIORITY_QUEUE_BLOCK_SIZE = 1024;
