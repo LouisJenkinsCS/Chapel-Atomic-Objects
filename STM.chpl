@@ -13,9 +13,9 @@ use List;
 		var x = 0;
 		var stm = manager.getDescriptor();
 		try! {
-			stm.begin();
+			stm.beginTransaction();
 			stm.write(x, stm.read(x) + 1);
-			stm.commit();
+			stm.commitTransaction();
 		} catch retry : STMRetry {
 			// ...
 		}
@@ -34,7 +34,7 @@ class STMAbort : Error {
 }
 
 type Version = uint(64);
-type Address = (uint(64), uint(64));
+type Address = uint(64);
 type Value = uint(64);
 
 class STMVersion {
@@ -45,16 +45,11 @@ class STMVersion {
 	}
 }
 
-inline proc toAddress(val) : Address {
-	return (here.id, __primitive("cast", uint(64), val));	
-}
-
-
 class LocalSTMManager {
 	var spinlock : atomic bool;
 	var recycleList : list(STMDescr);
 	var clusterVersion : STMVersion;
-	var nodeVersion : Version;
+	var nodeVersion = new STMVersion();
 
 	inline proc acquire() {
 		if spinlock.testAndSet() {
@@ -73,7 +68,7 @@ class LocalSTMManager {
 		var descr : STMDescr;
 		
 		acquire();
-		if list.length != 0 {
+		if recycleList.length != 0 {
 			descr = recycleList.pop_front();
 		}
 		release();
@@ -81,6 +76,8 @@ class LocalSTMManager {
 		if descr == nil {
 			descr = new STMDescr(clusterVersion=clusterVersion, nodeVersion=nodeVersion);
 		}
+
+		return descr;
 	}
 
 	proc putDescriptor(descr : STMDescr) {
@@ -89,6 +86,48 @@ class LocalSTMManager {
 		release();
 	}
 }
+
+/*
+	Metadata for STM copies of objects to handle type conversions
+	and data integrity checks.
+*/
+record STMObject {
+	var dataSize : uint(64) = 0;
+	var copyData : c_ptr(uint(8)) = nil;
+	var origData : c_ptr(uint(8)) = nil;
+
+	inline proc toType(type retType) : retType {
+		var sz = c_sizeof(retType);
+		if sz > dataSize {
+			halt("Request of size: ", sz, ", but only have enough data for: ", dataSize);
+		}
+
+		return (copyData : c_ptr(retType))[0];
+	}
+
+	inline proc allocateFor(ptr : c_ptr(?dataType)) {
+		var sz = c_sizeof(dataType);
+		if copyData != nil {
+			c_free(copyData);
+		}
+
+		copyData = c_calloc(uint(8), sz);
+		dataSize = sz;
+
+		(copyData : c_ptr(dataType))[0] = ptr[0];
+		origData = ptr;
+	}
+
+	inline proc validate() : bool {
+		return c_memcmp(origData, copyData, dataSize) == 0;
+	}
+
+	// Note: Do not invoke object destructor, just delete current shallow copy
+	proc ~STMObject() {
+		if copyData != nil then c_free(copyData);
+	}
+}
+
 
 /*
 	Descriptor that contains metadata for performing transactions.
@@ -106,6 +145,11 @@ class STMDescr {
 	var clusterVersion : STMVersion;
 	var nodeVersion : STMVersion;
 	var localVersion : Version;
+
+	proc STMDescr(clusterVersion:STMVersion, nodeVersion:STMVersion) {
+		this.clusterVersion = clusterVersion;
+		this.nodeVersion = nodeVersion;
+	}
 
 	inline proc appendRead(addr : Address, val : Value) {
 		readDom += addr;
@@ -137,7 +181,7 @@ class STMDescr {
 				var val = readSet[_addr];
 
 				if (addr[0] != val) {
-					throw new STMRetry(STM_CONFLICT);
+					throw new STMAbort(STM_CONFLICT);
 				}
 			}
 
@@ -150,9 +194,9 @@ class STMDescr {
 		halt("Should not have reached the end of validate...");
 	}
 
-	proc begin() {
-		readSet.clear();
-		writeSet.clear();
+	proc beginTransaction() {
+		readDom.clear();
+		writeDom.clear();
 		localVersion = nodeVersion.current;	
 		while((localVersion & 1) != 0) {
 			chpl_task_yield();
@@ -160,20 +204,18 @@ class STMDescr {
 		}
 	}
 
-	// Note: Must be multiple of 8
-	// Note: Must be a pointer to memory *local* to this node
-	proc read(ptr : c_ptr(?dataType)) : dataType {
-		var ret : dataType;
-		var sz = c_sizeof(dataType);
-
-		// If we already have this data, 
-		for 
+	proc read(ref val) : Value {
+		return read(c_ptrTo(val));
 	}
 
-	// TODO: add a way to handle multi-word data
-	proc read(ref obj : dataType) : dataType {
-		return STMRead(byRef(obj) : c_ptr(dataType));
-		// return STMRead((here.id, __primitive("cast", uint(64), val)));
+	proc read(val : c_ptr(?dataType)) : dataType {
+		//var sz = c_sizeof(dataType);
+		//var dataPtr = c_ptrTo(data);
+		// Read contents at each address...
+		//for addr in 0..#sz by c_sizeof(uint(64)) {
+		//	c_memset(c_ptrTo(data), )
+		//}
+		return read((here.id : uint(64), __primitive("cast", uint(64), val)));
 	}
 
 	proc read(addr : Address) : Value {
@@ -201,19 +243,16 @@ class STMDescr {
 		appendWrite(addr, val);
 	}
 
-	proc commit() {
+	proc commitTransaction() {
 		// Already verified that our readset is fine earlier, we're done
 		if writeDom.isEmpty() {
 			return;
 		}
 
 		// Contest for transactional lock
-		while !clusterVersion.version.compareExchange(localVersion, localVersion + 1) {
+		while !nodeVersion.version.compareExchange(localVersion, localVersion + 1) {
 			localVersion = validate();
 		}
-
-		// TODO: Do forall nodes
-		nodeVersion.write(localVersion + 1);
 
 		// Commit writes to memory
 		for _addr in writeDom {
@@ -222,26 +261,40 @@ class STMDescr {
 		}
 
 		// Release lock, we're done...
-		// TODO: Do forall nodes
 		nodeVersion.version.write(localVersion + 2);
-		clusterVersion.version.write(localVersion + 2);
 	}
 }
 
+class O {
+	var x = 1;
+}
+
+var data : STMObject;
+var x : uint(64) = 1;
+data.allocateFor(c_ptrTo(x));
+writeln("x=", x, ", data=", data.toType(uint(64)));
+x = 2;
+writeln("x=", x, ", data=", data.toType(uint(64)));
+writeln("data.validate=", data.validate());
+
+
+/*
 local {
 	var manager = new LocalSTMManager();
 	var stm = manager.getDescriptor();
 
-	var o1 : object;
-	var o2 : object;
+	var o1 : O;
+	var o2 : O;
 	try! {
-		stm.begin();
-		writeln("Reading o1:", stm.read(c_ptrTo(o1)));
+		stm.beginTransaction();
+		writeln("Reading o1:", stm.read(o1));
 		o1 = new object();
 		writeln("Invalidated o1...");
-		stm.validate();
-	} catch retry : STMRetry {
+		stm.commitTransaction();
+		writeln("Successfully committed transaction...");
+	} catch retry : STMAbort {
 		writeln("Successfully aborted...");
 	}
 	writeln("Finished");
 }
+*/
