@@ -2,166 +2,143 @@ use Time;
 use Collection;
 use LocalAtomicObject;
 
-config param MAX_CCSYNCH_REQUESTS = 64;
-config param PRIORITY_QUEUE_DEFAULT_SIZE = 1024;
-param PRIORITY_QUEUE_ADD = 0;
-param PRIORITY_QUEUE_REMOVE = 1;
 
 /*
 	A priority queue implementation written in Chapel. The
 	priority queue offers the standard operations via the 
-	Collection's add' and 'remove' operations. Makes use
-	of the CC-Synch algorithm to perform flat-combining to
-	allow scalable mutual exclusion.
+	Collection's add' and 'remove' operations. Makes use of
+	STM concepts such as read and write logs to allow
+	concurrency, as well as Epoch-Based Reclamation and
+	recycling memory (I.E RCUArray) to allow resizing
+	of the data structure.
 */
 
-class CCSynchNode {
+config param PRIORITY_QUEUE_BLOCK_SIZE = 1024;
+
+class ArrayBlock {
 	type eltType;
+	var arr : [0..#PRIORITY_QUEUE_BLOCK_SIZE] eltType;
 
-	// Result of operation
-    var elt : eltType;
-    var op : int;
-    var status : int;
+	proc this(idx) ref {
+		if (idx >= PRIORITY_QUEUE_BLOCK_SIZE) {
+			halt(idx, " >= ", PRIORITY_QUEUE_BLOCK_SIZE);
+		}
 
-    // If wait is false, we spin
-    // If wait is true, but completed is false, we are the new combiner thread
-    // If wait is true and completed is true, we are done and can exit
-    var wait : atomic bool;
-    var completed : bool;
+		return arr[idx];
+	}
+}
 
-    // Next in the waitlist
-    var next : LocalAtomicObject(CCSynchNode(eltType));
+class ArrayImpl {
+	type eltType;
+	var dom = {0..-1};
+	var block : [dom] ArrayBlock;
+
+	proc this(idx) ref {
+		var blockIdx = idx / PRIORITY_QUEUE_BLOCK_SIZE;
+		var elemIdx = idx % PRIORITY_QUEUE_BLOCK_SIZE;
+
+		if blockIdx >= dom.high {
+			halt(idx, " >= ", dom.high * PRIORITY_QUEUE_BLOCK_SIZE);
+		}
+
+		return block[blockIdx];
+	} 
 }
 
 class PriorityQueue : CollectionImpl {
 	var comparator : func(eltType, eltType, eltType);
-	var dom = {0..#PRIORITY_QUEUE_DEFAULT_SIZE};
-	var arr : [dom] eltType;
+	var data : ArrayImpl;
 	var size : int;
 
-	// Used in sync versions
+	// Lock used to resize
 	var lock$ : sync bool;
-
-	// Used in CCSynch versions
-	var ccWaitList : LocalAtomicObject(CCSynchNode(eltType));
 
 	proc PriorityQueue(type eltType, comparator : func(eltType, eltType, eltType)) {
 		this.comparator = comparator;
-
-		// Create dummy node
-		ccWaitList.write(new CCSynchNode(eltType));
+		
+		// Initialize with one block
+		this.data = new ArrayImpl(eltType);
+		this.data.dom = {0..0};
+		this.data.block[0] = new ArrayBlock(eltType);
 	}
 
+	// Parllel-safe
+	proc expand() {
+		lock$ = true;
+
+		// Create new Array that recycles old memory
+		var newData = new ArrayImpl();
+		newData.dom = {0..data.dom.high + 1};
+		newData[0..data.dom.high] = data.block;
+		newData[newData.dom.high] = new ArrayBlock();
+
+		// Update as current
+		// TODO: Manage deletion of previous one
+		data = newData;
+
+		lock$;
+	}
+
+	/*
+		Code for add...
+
+			var idx = size;
+        			
+			// Resize if needed
+			if idx >= dom.last {
+				dom = {0..(((dom.last * 1.5) : int) - 1)};
+			}
+
+			// Insert
+			arr[idx] = tmpNode.elt;
+			size += 1;
+
+			// Rebalance
+			if idx > 0 {
+				var child = arr[idx];
+				var parent = arr[getParent(idx)];
+
+				// Heapify Up
+				while idx != 0 && comparator(child, parent) == child {
+					var tmp = arr[idx];
+					arr[idx] = arr[getParent(idx)];
+					arr[getParent(idx)] = tmp;
+
+					idx = getParent(idx);
+					child = arr[idx];
+					if idx == 0 then break;
+					parent = arr[getParent(idx)];
+				}
+			}
+
+	*/
 	proc add(elt : eltType) : bool {
 		on this {
-			var resultNode = doCCSynch(PRIORITY_QUEUE_ADD, elt);
-			delete resultNode;
+			// TODO
 		}
 		return true;
 	}
 
+	/*
+		Code for remove...
+
+			if size != 0 {
+				var tmp = arr[0];
+				arr[0] = arr[size - 1];
+				arr[size - 1] = tmp;
+				size -= 1;
+
+				heapify(0);
+				tmpNode.status = 1;
+				tmpNode.elt = tmp;
+			}
+	*/
 	proc remove() : (bool, eltType) {
 		var retval : (bool, eltType);
       	on this {
-      		var resultNode = doCCSynch(PRIORITY_QUEUE_REMOVE);
-      		retval = (resultNode.status == 1, resultNode.elt);
-      		delete resultNode;
+      		// TODO
       	}
       	return retval;
-	}
-
-	// Perform CCSynch algorithm and get result
-	proc doCCSynch(op : int, elt : eltType = _defaultOf(eltType)) : CCSynchNode(eltType) {
-		var counter = 0;
-      	var nextNode = new CCSynchNode(eltType);
-      	nextNode.wait.write(true);
-      	nextNode.completed = false;
-
-      	// Register our dummy node so that the next task can add theirs safely,
-      	// then fill out the node we assigned to use
-      	var currNode = ccWaitList.exchange(nextNode);
-      	currNode.op = op;
-      	currNode.elt = elt;
-      	currNode.next.write(nextNode);
-
-      	// Spin until we are finished...
-      	currNode.wait.waitFor(false);
-
-      	// If our operation is marked complete, we may safely reclaim it, as it is no
-      	// longer being touched by the combiner thread
-      	if currNode.completed {
-        	return currNode;
-      	}
-
-      	// If we are not marked as complete, we *are* the combiner thread
-      	var tmpNode = currNode;
-      	var tmpNodeNext : CCSynchNode(eltType);
-
-      	while (tmpNode.next.read() != nil && counter < MAX_CCSYNCH_REQUESTS) {
-        	counter = counter + 1;
-        	// Note: Ensures that we do not touch the current node after it is freed
-        	// by the owning thread...
-        	tmpNodeNext = tmpNode.next.read();
-
-        	// Process
-        	select tmpNode.op {
-        		when PRIORITY_QUEUE_ADD {
-        			var idx = size;
-        			
-        			// Resize if needed
-        			if idx >= dom.last {
-        				dom = {0..(((dom.last * 1.5) : int) - 1)};
-        			}
-
-        			// Insert
-        			arr[idx] = tmpNode.elt;
-        			size += 1;
-
-        			// Rebalance
-        			if idx > 0 {
-        				var child = arr[idx];
-        				var parent = arr[getParent(idx)];
-
-        				// Heapify Up
-        				while idx != 0 && comparator(child, parent) == child {
-        					var tmp = arr[idx];
-        					arr[idx] = arr[getParent(idx)];
-        					arr[getParent(idx)] = tmp;
-
-        					idx = getParent(idx);
-        					child = arr[idx];
-        					if idx == 0 then break;
-        					parent = arr[getParent(idx)];
-        				}
-        			}
-        		}
-        		when PRIORITY_QUEUE_REMOVE {
-        			if size != 0 {
-        				var tmp = arr[0];
-        				arr[0] = arr[size - 1];
-        				arr[size - 1] = tmp;
-        				size -= 1;
-
-        				heapify(0);
-        				tmpNode.status = 1;
-        				tmpNode.elt = tmp;
-        			}
-        		}
-        	}
-
-        	// We are done with this one... Note that this uses an acquire barrier so
-        	// that the owning task sees it as completed before wait is no longer true.
-        	tmpNode.completed = true;
-        	tmpNode.wait.write(false);
-
-        	tmpNode = tmpNodeNext;
-      	}
-
-      	// At this point, it means one thing: Either we are on the dummy node, on which
-      	// case nothing happens, or we exceeded the number of requests we can do at once,
-      	// meaning we wake up the next thread as the combiner.
-      	tmpNode.wait.write(false);
-      	return currNode;
 	}
 
 	proc heapify(_idx : int) {

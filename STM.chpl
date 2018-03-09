@@ -8,6 +8,12 @@ use List;
 	Implementation of NORec STM:
 		https://anon.cs.rochester.edu/u/scott/papers/2010_ppopp_NOrec.pdf
 
+	TODO List: Add Epoch-Based Garbage Collection where each transaction starts
+	in an epoch era and only advances after calling 'commit' or when it calls
+	'begin' again. When something is to be deleted, defer deletion until the
+	end, which will cause in the succeeding transaction to wait for all conflicting
+	transactions to abort... only if they have the conflicting item in their readset
+
 
 	Example:
 		var x = 0;
