@@ -1,8 +1,3 @@
-use Time;
-use Collection;
-use LocalAtomicObject;
-
-
 /*
 	A priority queue implementation written in Chapel. The
 	priority queue offers the standard operations via the 
@@ -72,75 +67,20 @@ use LocalAtomicObject;
 	
 */
 
-config param PRIORITY_QUEUE_BLOCK_SIZE = 1024;
-
-class ArrayBlock {
-	type eltType;
-	var arr : [0..#PRIORITY_QUEUE_BLOCK_SIZE] eltType;
-
-	proc this(idx) ref {
-		if (idx >= PRIORITY_QUEUE_BLOCK_SIZE) {
-			halt(idx, " >= ", PRIORITY_QUEUE_BLOCK_SIZE);
-		}
-
-		return arr[idx];
-	}
-}
-
-class ArrayImpl {
-	type eltType;
-	var dom = {0..-1};
-	var block : [dom] ArrayBlock;
-
-	proc this(idx) ref {
-		var blockIdx = idx / PRIORITY_QUEUE_BLOCK_SIZE;
-		var elemIdx = idx % PRIORITY_QUEUE_BLOCK_SIZE;
-
-		if blockIdx >= dom.high {
-			halt(idx, " >= ", dom.high * PRIORITY_QUEUE_BLOCK_SIZE);
-		}
-
-		return block[blockIdx];
-	} 
-}
+use Collection;
 
 class PriorityQueue : CollectionImpl {
 	var comparator : func(eltType, eltType, eltType);
-	var data : ArrayImpl;
+	var dom = {0..1024};
+	var arr : [dom] eltType;
 	var size : int;
-
-	// Lock used to resize
-	var lock$ : sync bool;
 
 	proc PriorityQueue(type eltType, comparator : func(eltType, eltType, eltType)) {
 		this.comparator = comparator;
-		
-		// Initialize with one block
-		this.data = new ArrayImpl(eltType);
-		this.data.dom = {0..0};
-		this.data.block[0] = new ArrayBlock(eltType);
 	}
 
-	// Parllel-safe
-	proc expand() {
-		lock$ = true;
-
-		// Create new Array that recycles old memory
-		var newData = new ArrayImpl();
-		newData.dom = {0..data.dom.high + 1};
-		newData[0..data.dom.high] = data.block;
-		newData[newData.dom.high] = new ArrayBlock();
-
-		// Update as current
-		// TODO: Manage deletion of previous one
-		data = newData;
-
-		lock$;
-	}
-
-	/*
-		Code for add...
-
+	proc add(elt : eltType) : bool {
+		on this {
 			var idx = size;
         			
 			// Resize if needed
@@ -149,7 +89,7 @@ class PriorityQueue : CollectionImpl {
 			}
 
 			// Insert
-			arr[idx] = tmpNode.elt;
+			arr[idx] = elt;
 			size += 1;
 
 			// Rebalance
@@ -165,37 +105,24 @@ class PriorityQueue : CollectionImpl {
 
 					idx = getParent(idx);
 					child = arr[idx];
-					if idx == 0 then break;
 					parent = arr[getParent(idx)];
 				}
 			}
-
-	*/
-	proc add(elt : eltType) : bool {
-		on this {
-			// TODO
 		}
 		return true;
 	}
 
-	/*
-		Code for remove...
-
-			if size != 0 {
-				var tmp = arr[0];
-				arr[0] = arr[size - 1];
-				arr[size - 1] = tmp;
-				size -= 1;
-
-				heapify(0);
-				tmpNode.status = 1;
-				tmpNode.elt = tmp;
-			}
-	*/
+	// Implement Collection's 'remove' 
 	proc remove() : (bool, eltType) {
 		var retval : (bool, eltType);
       	on this {
-      		// TODO
+      		if size > 0 {
+				retval =  (true, arr[0]);
+				arr[0] = arr[size - 1];
+				size -= 1;
+
+				heapify(0);
+			}
       	}
       	return retval;
 	}
@@ -209,25 +136,17 @@ class PriorityQueue : CollectionImpl {
 		var l = getLeft(idx);
 		var r = getRight(idx);
 		var tmp = idx;
-
-		// Out of bounds
-		if l >= size || r >= size {
-			return;
-		}
-
-		var left = arr[l];
-		var right = arr[r];
 		var curr = arr[idx];
 
 		// left > current
-		if comparator(curr, left) == left {
-			curr = left;
+		if size > l && comparator(curr, arr[l]) == arr[l] {
+			curr = arr[l];
 			idx = l;
 		}
 
 		// right > current
-		if comparator(curr, right) == right {
-			curr = right;
+		if size > r && comparator(curr, arr[r]) == arr[r] {
+			curr = arr[r];
 			idx = r;
 		}
 
@@ -240,134 +159,40 @@ class PriorityQueue : CollectionImpl {
 		}
 	}
 
-	inline proc getLeft(x) {
+	inline proc getParent(x:int) : int {
+		return floor((x - 1) / 2);
+	}
+
+	inline proc getLeft(x:int) : int {
 		return 2 * x + 1; 
 	}
 
-	inline proc getRight(x) {
+	inline proc getRight(x:int) : int {
 		return 2 * x + 2;
-	}
-
-	inline proc getParent(x) {
-		return (x - 1) / 2;
-	}
-
-	proc syncAdd(elt : eltType) {
-		lock$ = true;
-		var idx = size;
-        			
-		// Resize if needed
-		if idx >= dom.last {
-			dom = {0..(((dom.last * 1.5) : int) - 1)};
-		}
-
-		// Insert
-		arr[idx] = elt;
-		size += 1;
-
-		// Rebalance
-		if idx > 0 {
-			var child = arr[idx];
-			var parent = arr[getParent(idx)];
-
-			// Heapify Up
-			while idx != 0 && comparator(child, parent) == child {
-				var tmp = arr[idx];
-				arr[idx] = arr[getParent(idx)];
-				arr[getParent(idx)] = tmp;
-
-				idx = getParent(idx);
-				child = arr[idx];
-				if idx == 0 then break;
-				parent = arr[getParent(idx)];
-			}
-		}
-
-		lock$;
-	}
-
-	proc syncRemove() {
-
-		lock$ =true;
-
-		if size != 0 {
-			var tmp = arr[0];
-			arr[0] = arr[size - 1];
-			arr[size - 1] = tmp;
-			size -= 1;
-
-			heapify(0);
-		}
-
-		lock$;
 	}
 }
 
-config var weakScaling = false;
-config var nTrials = 4;
-config var nOperations = 1024 * 1024;
+use Random;
+use Sort;
 
 proc main() { 
-	var pq = new PriorityQueue(int, lambda(x:int, y:int) { return if x > y then x else y; });
-	var t : Timer();
+	const nElems = 1024 * 1024;
+	var cmp = lambda(x:int, y:int) { return if x > y then x else y; };
+	var pq = new PriorityQueue(int, cmp);
 
-	for maxTaskPar in 1..here.maxTaskPar {
-		if maxTaskPar != 1 && maxTaskPar % 2 != 0 then continue;
-		var trialTimes : [0..#nTrials] real;
-		for trial in 0..#nTrials {
-			t.start();
-			// Concurrent Add Phase
-			coforall tid in 0..#maxTaskPar {
-				var iterations = nOperations / maxTaskPar; 
-				var start = iterations * tid;
-				var end = iterations * (tid + 1);
-				if !weakScaling then for i in start..#end do pq.add(i);
-				else for i in 0..#nOperations do pq.add(i);
-			}
-			// Concurrent Remove Phase
-			coforall tid in 0..#maxTaskPar {
-				var iterations = nOperations / maxTaskPar; 
-				var start = iterations * tid;
-				var end = iterations * (tid + 1);
-				if !weakScaling then for i in start..#end do pq.remove();
-				else for i in 0..#nOperations do pq.remove();
-			}
-			t.stop();
-			trialTimes[trial] = t.elapsed();
-			t.clear();
-		}
+	// Generate random elems
+	var rng = makeRandomStream(int);
+	var arr : [1..nElems] int;
+	rng.fillRandom(arr);
 
-		writeln("CCSynch ~ [", maxTaskPar, " Threads]: ", 
-			(if weakScaling then 2 * nOperations * maxTaskPar else 2 * nOperations) / (+ reduce trialTimes / nTrials**2));
-	}
+	// Test Collection's 'addBulk' utility method
+	pq.addBulk(arr);
 
-	for maxTaskPar in 1..here.maxTaskPar {
-		if maxTaskPar != 1 && maxTaskPar % 2 != 0 then continue;
-		var trialTimes : [0..#nTrials] real;
-		for trial in 0..#nTrials {
-			t.start();
-			// Concurrent Add Phase
-			coforall tid in 0..#maxTaskPar {
-				var iterations = nOperations / maxTaskPar; 
-				var start = iterations * tid;
-				var end = iterations * (tid + 1);
-				if !weakScaling then for i in start..#end do pq.syncAdd(i);
-				else for i in 0..#nOperations do pq.syncAdd(i);
-			}
-			// Concurrent Remove Phase
-			coforall tid in 0..#maxTaskPar {
-				var iterations = nOperations / maxTaskPar; 
-				var start = iterations * tid;
-				var end = iterations * (tid + 1);
-				if !weakScaling then for i in start..#end do pq.syncRemove();
-				else for i in 0..#nOperations do pq.syncRemove();
-			}
-			t.stop();
-			trialTimes[trial] = t.elapsed();
-			t.clear();
-		}
+	// Test Collection's 'removeBulk'
+	var sortedArr = pq.removeBulk(nElems);
 
-		writeln("Sync ~ [", maxTaskPar, " Threads]: ", 
-			(if weakScaling then 2 * nOperations * maxTaskPar else 2 * nOperations) / (+ reduce trialTimes / nTrials**2));
-	}
+	// Test result...
+	var cmp2 = new ReverseComparator();
+	assert(isSorted(sortedArr, cmp2));
+	writeln("SUCCESS!");
 }
