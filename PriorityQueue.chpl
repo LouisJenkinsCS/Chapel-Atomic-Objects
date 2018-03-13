@@ -68,15 +68,18 @@
 */
 
 use Collection;
+use Sort;
 
 class PriorityQueue : CollectionImpl {
-	var comparator : func(eltType, eltType, eltType);
-	var dom = {0..1024};
+	// Comparator record
+	var cmp;
+	var defaultSize : int;
+	var dom = {0..-1};
 	var arr : [dom] eltType;
 	var size : int;
 
-	proc PriorityQueue(type eltType, comparator : func(eltType, eltType, eltType)) {
-		this.comparator = comparator;
+	proc PriorityQueue(type eltType, cmp = defaultComparator, defaultSize:int = 1024) {
+		dom = {0..#defaultSize};
 	}
 
 	proc add(elt : eltType) : bool {
@@ -98,7 +101,7 @@ class PriorityQueue : CollectionImpl {
 				var parent = arr[getParent(idx)];
 
 				// Heapify Up
-				while idx != 0 && comparator(child, parent) == child {
+				while idx != 0 && chpl_compare(child, parent, cmp) == 1 {
 					var tmp = arr[idx];
 					arr[idx] = arr[getParent(idx)];
 					arr[getParent(idx)] = tmp;
@@ -139,13 +142,13 @@ class PriorityQueue : CollectionImpl {
 		var curr = arr[idx];
 
 		// left > current
-		if size > l && comparator(curr, arr[l]) == arr[l] {
+		if size > l && chpl_compare(curr, arr[l], cmp) == -1 {
 			curr = arr[l];
 			idx = l;
 		}
 
 		// right > current
-		if size > r && comparator(curr, arr[r]) == arr[r] {
+		if size > r && chpl_compare(curr, arr[r], cmp) == -1 {
 			curr = arr[r];
 			idx = r;
 		}
@@ -170,29 +173,50 @@ class PriorityQueue : CollectionImpl {
 	inline proc getRight(x:int) : int {
 		return 2 * x + 2;
 	}
+
+	pragma "fn returns iterator"
+	inline proc these() {
+		return arr.these();
+	}
+
+	pragma "fn returns iterator"
+	inline proc these(param tag : iterKind) {
+		return arr.these(tag);
+	}
 }
 
 use Random;
-use Sort;
+
+
+proc makePriorityQueue(arr : [] ?eltType, cmp=defaultComparator) {
+	var newArr = reshape(arr, {0..(arr.domain.high - arr.domain.low)});
+	heapSort(newArr, cmp);
+	
+	var pq = new PriorityQueue(eltType, cmp);
+	pq.dom = newArr.domain;
+	pq.arr = newArr;
+
+	return pq;
+}
+
+
 
 proc main() { 
-	const nElems = 1024 * 1024;
-	var cmp = lambda(x:int, y:int) { return if x > y then x else y; };
-	var pq = new PriorityQueue(int, cmp);
+	const nElems = 16;
 
 	// Generate random elems
 	var rng = makeRandomStream(int);
 	var arr : [1..nElems] int;
 	rng.fillRandom(arr);
 
-	// Test Collection's 'addBulk' utility method
-	pq.addBulk(arr);
+	var pq = makePriorityQueue(arr);
+
+	// Test Collection's 'addBulk'
+	pq.addBulk(rng.iterate({1..nElems}));
 
 	// Test Collection's 'removeBulk'
 	var sortedArr = pq.removeBulk(nElems);
 
-	// Test result...
-	var cmp2 = new ReverseComparator();
-	assert(isSorted(sortedArr, cmp2));
+	assert(isSorted(sortedArr, reverseComparator));
 	writeln("SUCCESS!");
 }
