@@ -38,12 +38,12 @@ print("chpl --fast " + fileName + ".chpl -o " + fileName);
 
 # Execute
 
-writeResults = {}
-for writes in numWrites:
+targetResults = {}
+for target in targets:
 	localeResults = {}
 	for locales in numLocales:
-		targetResults = {}
-		for target in targets:
+		writeResults = {}
+		for writes in numWrites:		
 			outputFile = target + "-" + str(writes) + "-" + str(locales)
 			
 			# Execute 
@@ -54,9 +54,15 @@ for writes in numWrites:
 			
 			# Collect results...
 			targetResult = 0;
-			targetResults[target] = targetResult
+			writeResults[writes] = targetResult
 		localeResults[locales] = writeResults
-	writeResults[writes] = targetResults
+	targetResults[target] = localeResults
 
-print(writeResults)
+print(targetResults)
+for target in targetResults:
+	outputStr = {0: "", 20: "", 40: "", 60: "", 80: "", 100: ""};
+	for loc in targetResults[target]:
+		for writes in targetResults[target][loc]:
+			outputStr[writes] += str(targetResults[target][loc][writes]) + " "
+	print (target + ": " + str(outputStr))
 
