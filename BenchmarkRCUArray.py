@@ -4,6 +4,7 @@ import time
 import numpy
 import random
 import Queue
+import os
 from subprocess import Popen, call
 
 processQueue = Queue.Queue()
@@ -14,12 +15,17 @@ class Task:
 	isDone = False
 	args = []
 
-	def __init__(self, args):
-		self.args = args;
+	# Used for parallelization
+	localesNeeded = 0
+
+	def __init__(self, args, localesNeeded):
+		self.args = args
+		self.localesNeeded = localesNeeded
 
 # Worker Thread
 def processWorker():
 	activeProcs = []
+	FNULL = open(os.devnull, 'w')
 	while processWorkerKeepAlive:
 		# Check current processes...
 		for (task, proc) in activeProcs:
@@ -35,9 +41,9 @@ def processWorker():
 			continue
 
 		# Handle processing...
-		activeProcs.append((task, Popen(task.args)))
+		activeProcs.append((task, Popen(task.args, stdout=FNULL, stderr=FNULL)))
 		
-
+maxLocales = 64
 numLocales = [1,2,4,8,16,32]
 numTrials = 4
 numWrites = (numpy.array(range(0,11, 2)) * 10)
@@ -89,8 +95,8 @@ threading.Thread(target=processWorker).start()
 # Compile executable
 print("Creating " + EBRExecutable + "...")
 print("Creating " + QSBRExecutable + "...")
-task1 = Task(["chpl", "--fast", fileName + ".chpl", "-o", EBRExecutable])
-task2 = Task(["chpl", "--fast", fileName + ".chpl", "-sConcurrentArrayUseQSBR=1", "-o", QSBRExecutable])
+task1 = Task(["chpl", "--fast", fileName + ".chpl", "-o", EBRExecutable], 0)
+task2 = Task(["chpl", "--fast", fileName + ".chpl", "-sConcurrentArrayUseQSBR=1", "-o", QSBRExecutable], 0)
 processQueue.put(task1)
 processQueue.put(task2)
 
@@ -98,57 +104,75 @@ while not task1.isDone or not task2.isDone:
 	time.sleep(1)
 
 # Execute
+# TODO: Find a way to parallelize both EBR and QSBR...
+results = {}
+tasks = []
+localesUsed = 0
 targetResults = {}
-for target in targets:
-	localeResults = {}
-	for locales in numLocales:
-		# TODO: Parallelize this part to handle waiting on processes in parallel...
-		tasks = []
-		localesUsed = 0
-		writeResults = {}
-		outputFiles = {}
-		for writes in numWrites:		
-			outputFile = target + "-" + str(writes) + "-" + str(locales)
-			outputFiles[writes] = outputFile
+outputFiles = {}
 
-			# Execute 
+# Initialize the maps used above
+for target in targets:
+	outputFiles[target] = {}
+	targetResults[target] = {}
+	for locales in numLocales:
+		outputFiles[target][locales] = {}
+		targetResults[target][locales] = {}
+
+for locales in numLocales:		
+	for writes in numWrites:
+		for target in targets:
+			# Store output file as way to obtaining result from this task
+			outputFile = target + "-" + str(writes) + "-" + str(locales) + ".result"
+			outputFiles[target][locales][writes] = outputFile
+
+			print("Target=" + target + ", Writes=" + str(writes) + ", Locales=" + str(locales))
+
+			# Submit to task queue
 			executable = EBRExecutable if target == "EBR" else QSBRExecutable
-			print("Executing " + executable + ", Writes=" + str(writes) + ", Locales=" + str(locales) + "\n")
 			task = Task(["../chapel/util/test/chpl_launchcmd.py", "./" + executable,  "-nl", str(locales), 
 				"--numWrites", str(writes), "--numTrials", str(numTrials),
 				"--outputFile", outputFile, "--target", target, 
-				"--numOperations", str(numOperations)])
-			
-			# Submit new process
+				"--numOperations", str(numOperations)], locales)
 			processQueue.put(task)
 			tasks.append(task)
 			localesUsed += locales;
 
-			# Wait for current running processes
-			while localesUsed == 32:
+			# Wait for current running processes if at max capacity
+			while localesUsed >= maxLocales:
 				time.sleep(1)
 				for t in tasks:
 					if t.isDone:
 						tasks.remove(t)
-						localesUsed -= locales
+						localesUsed -= t.localesNeeded
 		
-		# Wait for current tasks
-		while localesUsed != 0:
-			time.sleep(1)
-			for t in tasks:
-				if t.isDone:
-					tasks.remove(t)
-					localesUsed -= locales
+# Wait for current tasks
+while localesUsed != 0:
+	time.sleep(1)
+	for t in tasks:
+		if t.isDone:
+			tasks.remove(t)
+			localesUsed -= locales
 
-		# Collect results...
-		for w in outputFiles:
-			outputFile = open(outputFiles[w], "r")
-			output = outputFile.read()
-			targetResult = float(output)
-			writeResults[w] = targetResult
-		localeResults[locales] = writeResults
-	targetResults[target] = localeResults
+# Shutdown worker
+processWorkerKeepAlive = False
 
+# Collect results from files...
+for target in outputFiles:
+	for locales in outputFiles[target]:
+		for writes in outputFiles[target][locales]:
+			outputPath = outputFiles[target][locales][writes]
+			if os.path.exists(outputPath):
+				outputFile = open(outputPath, "r")
+				output = outputFile.read()
+				if output == "":
+					targetResults[target][locales][writes] = 0
+				else:
+					targetResults[target][locales][writes] = float(output)
+			else:
+				targetResults[target][locales][writes] = 0
+
+# Translate output from files into space-separated files
 targetOutput = {}
 for target in targetResults:
 	buf = ""
@@ -157,7 +181,7 @@ for target in targetResults:
 			buf += str(loc) + " " + str(writes) + " " + str(targetResults[target][loc][writes]) + "\n"
 	targetOutput[target] = buf
 
-# NumLocales Write-Ratio Ops/Sec
+# Write .dat files
 files = []
 for t in targetOutput.keys():
 	fname = t + "-" + datFile
@@ -167,14 +191,17 @@ for t in targetOutput.keys():
 	file.close()
 	files.append(fname)
 
+# Create GNUPlot
 gplot = open("tmp.gplot", "w+")
 gplot.write("set term pngcairo\n")
 gplot.write("set output 'out.png'\n")
 gplot.write("set dgrid3d 30,30\n")
 gplot.write("set hidden3d\n")
 plotStr = "splot "
+plotStrArr = []
 for file in files:
-	plotStr += "\"" + file + "\" u 1:2:3 with lines, "
+	plotStrArr.append("\"" + file + "\" using 1:2:3 with lines")
+plotStr += ", ".join(plotStrArr)
 gplot.write(plotStr)
 gplot.close()
 
