@@ -101,26 +101,22 @@ class ConcurrentArrayImpl {
 	proc rcu_read_lock() : int {
 		var epoch : int;
 
-		if !ConcurrentArrayUseQSBR {
-			
+		// It is possible for a writer to change the current epoch between 
+		// our read and increment, so we must loop until we succeed. Note that
+		// this makes livelock possible, but is extremely rare and writers are
+		// infrequent compared to readers.
+		do {
+			var currentEpoch = globalEpoch.read();
+			epoch = currentEpoch % 2;
+			epochReaders[epoch].add(1);
 
-			// It is possible for a writer to change the current epoch between 
-			// our read and increment, so we must loop until we succeed. Note that
-			// this makes livelock possible, but is extremely rare and writers are
-			// infrequent compared to readers.
-			do {
-				var currentEpoch = globalEpoch.read();
-				epoch = currentEpoch % 2;
-				epochReaders[epoch].add(1);
-
-				// Writers will change the global epoch prior to waiting on readers. 
-				if currentEpoch != globalEpoch.read() {
-					// Undo reader count, loop again.
-					epochReaders[epoch].sub(1);
-					continue;
-				}
-			} while (false);
-		}
+			// Writers will change the global epoch prior to waiting on readers. 
+			if currentEpoch != globalEpoch.read() {
+				// Undo reader count, loop again.
+				epochReaders[epoch].sub(1);
+				continue;
+			}
+		} while (false);
 		
 		return epoch;
 	}
@@ -128,9 +124,7 @@ class ConcurrentArrayImpl {
 	// Releases read-access to the current instance. The index must be the same
 	// that is obtained from the 'acquireRead' read-barrier 
 	proc rcu_read_unlock(idx : int) {
-		if !ConcurrentArrayUseQSBR {
-			epochReaders[idx].sub(1);
-		}
+		epochReaders[idx].sub(1);
 	}
 
 	proc ConcurrentArrayImpl(type eltType, lock : ConcurrentArrayWriterLock, initialCap) {
@@ -168,7 +162,8 @@ class ConcurrentArrayImpl {
     }
 
     proc alloc(size, startLocId, nLocales) {
-    	var numChunks = (size / ConcurrentArrayChunkSize) + min(size % ConcurrentArrayChunkSize, 1);
+    	// If size is '0' do not expand, otherwise allocate at least one...
+    	var numChunks = if size == 0 then 0 else (size / ConcurrentArrayChunkSize) + min(size % ConcurrentArrayChunkSize, 1);
 		var newChunks : [{1..numChunks}] ConcurrentArrayChunk(eltType);
 		var currLocId = startLocId % nLocales;
 		for i in 1 .. numChunks {
@@ -229,17 +224,25 @@ class ConcurrentArrayImpl {
 
     // Indexes into the distributed vector
     proc this(idx : int) ref {
-    	var rcIdx = rcu_read_lock();
-    	
-    	// If the index is currently allocated, then we simply
-    	// fetch the actual element being referenced.
-    	if snapshot.isAllocated(idx) {
-    		ref elt = snapshot[idx];
+    	if ConcurrentArrayUseQSBR == false {
+	    	var rcIdx = rcu_read_lock();
+	    	
+	    	// If the index is currently allocated, then we simply
+	    	// fetch the actual element being referenced.
+	    	if snapshot.isAllocated(idx) {
+	    		ref elt = snapshot[idx];
+		    	rcu_read_unlock(rcIdx);
+		    	return elt;
+	    	}
 	    	rcu_read_unlock(rcIdx);
-	    	return elt;
+    	} else {
+    		if snapshot.isAllocated(idx) {
+	    		return snapshot[idx];
+	    	}
     	}
-    	rcu_read_unlock(rcIdx);
-    	halt("idx #", idx, " is out of bounds... max=", snapshot.chunks.size * ConcurrentArrayChunkSize, ", globalEpoch=", globalEpoch.read());
+
+    	halt("idx #", idx, " is out of bounds... max=", snapshot.chunks.size * ConcurrentArrayChunkSize, 
+	    		", globalEpoch=", globalEpoch.read());
     }
 
     proc contains(elt: eltType): bool {
