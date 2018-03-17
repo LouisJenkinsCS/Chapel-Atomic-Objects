@@ -1,10 +1,44 @@
+import threading
 import argparse
+import time
 import numpy
 import random
-from subprocess import call
+import Queue
+from subprocess import Popen, call
 
-# numLocales = [1,2,4,8,16,32]
-numLocales = [1]
+processQueue = Queue.Queue()
+processWorkerKeepAlive = True
+processWorkerTimeout = 1 # seconds
+
+class Task:
+	isDone = False
+	args = []
+
+	def __init__(self, args):
+		self.args = args;
+
+# Worker Thread
+def processWorker():
+	activeProcs = []
+	while processWorkerKeepAlive:
+		# Check current processes...
+		for (task, proc) in activeProcs:
+			if proc.poll() is not None:
+				task.isDone = True;
+				activeProcs.remove((task, proc));
+
+		try:
+			# Accepts arguments to spawn a process
+			# As this acquires a lock, it will flush our writes of the above as well
+			task = processQueue.get(True, processWorkerTimeout)
+		except Queue.Empty:
+			continue
+
+		# Handle processing...
+		activeProcs.append((task, Popen(task.args)))
+		
+
+numLocales = [1,2,4,8,16,32]
 numTrials = 4
 numWrites = (numpy.array(range(0,11, 2)) * 10)
 targets = ["QSBR", "EBR"]
@@ -48,35 +82,70 @@ datFile = args.datFile
 EBRExecutable = fileName + "-EBR"
 QSBRExecutable = fileName + "-QSBR"
 
+# Start background thread
+threading.Thread(target=processWorker).start()
+
 
 # Compile executable
 print("Creating " + EBRExecutable + "...")
-call(["chpl", "--fast", fileName + ".chpl", "-o", EBRExecutable]);
 print("Creating " + QSBRExecutable + "...")
-call(["chpl", "--fast", fileName + ".chpl", "-sConcurrentArrayUseQSBR=1", "-o", QSBRExecutable])
+task1 = Task(["chpl", "--fast", fileName + ".chpl", "-o", EBRExecutable])
+task2 = Task(["chpl", "--fast", fileName + ".chpl", "-sConcurrentArrayUseQSBR=1", "-o", QSBRExecutable])
+processQueue.put(task1)
+processQueue.put(task2)
+
+while not task1.isDone or not task2.isDone:
+	time.sleep(1)
 
 # Execute
 targetResults = {}
 for target in targets:
 	localeResults = {}
 	for locales in numLocales:
+		# TODO: Parallelize this part to handle waiting on processes in parallel...
+		tasks = []
+		localesUsed = 0
 		writeResults = {}
+		outputFiles = {}
 		for writes in numWrites:		
 			outputFile = target + "-" + str(writes) + "-" + str(locales)
-			
+			outputFiles[writes] = outputFile
+
 			# Execute 
 			executable = EBRExecutable if target == "EBR" else QSBRExecutable
-			print("Executing " + EBRExecutable + ", Writes=" + str(writes) + ", Locales=" + str(locales) + "\n")
-			call(["../chapel/util/test/chpl_launchcmd.py", "./" + executable,  "-nl", str(locales), 
+			print("Executing " + executable + ", Writes=" + str(writes) + ", Locales=" + str(locales) + "\n")
+			task = Task(["../chapel/util/test/chpl_launchcmd.py", "./" + executable,  "-nl", str(locales), 
 				"--numWrites", str(writes), "--numTrials", str(numTrials),
 				"--outputFile", outputFile, "--target", target, 
 				"--numOperations", str(numOperations)])
 			
-			# Collect results...
-			outputFile = open(outputFile, "r")
+			# Submit new process
+			processQueue.put(task)
+			tasks.append(task)
+			localesUsed += locales;
+
+			# Wait for current running processes
+			while localesUsed == 32:
+				time.sleep(1)
+				for t in tasks:
+					if t.isDone:
+						tasks.remove(t)
+						localesUsed -= locales
+		
+		# Wait for current tasks
+		while localesUsed != 0:
+			time.sleep(1)
+			for t in tasks:
+				if t.isDone:
+					tasks.remove(t)
+					localesUsed -= locales
+
+		# Collect results...
+		for w in outputFiles:
+			outputFile = open(outputFiles[w], "r")
 			output = outputFile.read()
 			targetResult = float(output)
-			writeResults[writes] = targetResult
+			writeResults[w] = targetResult
 		localeResults[locales] = writeResults
 	targetResults[target] = localeResults
 

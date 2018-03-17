@@ -52,7 +52,7 @@ proc runRCUArray() {
   }
   var outfile = open(outputFile, iomode.cw);
   var outwriter = outfile.writer();
-  outwriter.writeln((numOperations * here.maxTaskPar * numLocales) / ((+ reduce results) / numTrials));
+  outwriter.writeln((+ reduce results) / numTrials);
   outwriter.close();
   outfile.close();
 }
