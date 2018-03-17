@@ -50,11 +50,12 @@ QSBRExecutable = fileName + "-QSBR"
 
 
 # Compile executable
+print("Creating " + EBRExecutable + "...")
 call(["chpl", "--fast", fileName + ".chpl", "-o", EBRExecutable]);
+print("Creating " + QSBRExecutable + "...")
 call(["chpl", "--fast", fileName + ".chpl", "-sConcurrentArrayUseQSBR=1", "-o", QSBRExecutable])
 
 # Execute
-
 targetResults = {}
 for target in targets:
 	localeResults = {}
@@ -65,7 +66,8 @@ for target in targets:
 			
 			# Execute 
 			executable = EBRExecutable if target == "EBR" else QSBRExecutable
-			call(["./" + executable,  "-nl", str(locales), 
+			print("Executing " + EBRExecutable + ", Writes=" + str(writes) + ", Locales=" + str(locales) + "\n")
+			call(["../chapel/util/test/chpl_launchcmd.py", "./" + executable,  "-nl", str(locales), 
 				"--numWrites", str(writes), "--numTrials", str(numTrials),
 				"--outputFile", outputFile, "--target", target, 
 				"--numOperations", str(numOperations)])
@@ -73,7 +75,6 @@ for target in targets:
 			# Collect results...
 			outputFile = open(outputFile, "r")
 			output = outputFile.read()
-			print(output)
 			targetResult = float(output)
 			writeResults[writes] = targetResult
 		localeResults[locales] = writeResults
