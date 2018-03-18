@@ -91,6 +91,7 @@ numTrials = int(args.numTrials)
 fileName = args.fileName
 numOperations = args.numOperations
 datFile = args.datFile
+maxLocales = args.maxLocales
 
 EBRExecutable = fileName + "-EBR"
 QSBRExecutable = fileName + "-QSBR"
