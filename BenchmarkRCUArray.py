@@ -41,7 +41,7 @@ def processWorker():
 			continue
 
 		# Handle processing...
-		activeProcs.append((task, Popen(task.args, stdout=FNULL, stderr=FNULL)))
+		activeProcs.append((task, Popen(task.args, stdout=FNULL)))
 		
 maxLocales = 64
 numLocales = [1,2,4,8,16,32]

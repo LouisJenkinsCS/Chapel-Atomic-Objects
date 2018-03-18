@@ -33,7 +33,7 @@ class ConcurrentArrayRC {
     	var _value = chpl_getPrivatizedCopy(ConcurrentArrayImpl(eltType), _pid);
     	// Chunks are shared across nodes, so we must take care to
     	// delete them only once.
-    	forall chunk in _value.snapshot.chunks do delete chunk;
+    	forall chunk in _value.snapshot.chunks do on chunk do _ddata_free(chunk, ConcurrentArrayChunkSize);
 
     	// Delete the per-node data
 		coforall loc in Locales do on loc do {
@@ -164,11 +164,11 @@ class ConcurrentArrayImpl {
     proc alloc(size, startLocId, nLocales) {
     	// If size is '0' do not expand, otherwise allocate at least one...
     	var numChunks = if size == 0 then 0 else (size / ConcurrentArrayChunkSize) + min(size % ConcurrentArrayChunkSize, 1);
-		var newChunks : [{1..numChunks}] ConcurrentArrayChunk(eltType);
+		var newChunks : [{1..numChunks}] _ddata(eltType);
 		var currLocId = startLocId % nLocales;
 		for i in 1 .. numChunks {
 			on Locales[currLocId] {
-				newChunks[i] = new ConcurrentArrayChunk(eltType);
+				newChunks[i] = _ddata_allocate(eltType, ConcurrentArrayChunkSize);
 			}
 
 			currLocId = (currLocId + 1) % nLocales;
@@ -265,10 +265,14 @@ class ConcurrentArrayImpl {
     }
 
     proc size : int {
-    	var rcIdx = rcu_read_lock();
-    	var sz = snapshot.chunks.size * ConcurrentArrayChunkSize;
-    	rcu_read_unlock(rcIdx);
-    	return sz;
+    	if ConcurrentArrayUseQSBR {
+    		return snapshot.chunks.size * ConcurrentArrayChunkSize;
+    	} else {
+	    	var rcIdx = rcu_read_lock();
+	    	var sz = snapshot.chunks.size * ConcurrentArrayChunkSize;
+	    	rcu_read_unlock(rcIdx);
+	    	return sz;
+    	}
     }
 }
 
@@ -283,7 +287,11 @@ class ConcurrentArraySnapshot {
 
 	// Each chunk is allocated on a one of the nodes we are distributed over.
 	// TODO: Find a way to keep track of wide_ptr_t to directly return by reference
-	var chunks : [0..-1] ConcurrentArrayChunk(eltType);
+	// TODO: Use c_void_ptr, make the distribution deterministic in terms of finding the
+	// owning node, then cast the offset into the chunk into 'eltType' and return that as a ref.
+	pragma "no copy"
+	pragma "local field"
+	var chunks : [0..-1] _ddata(eltType);
 
 	// Determines if the requested index currently exists, which is true if and only if
 	// the slot is allocated and that the position in the slot requested is in use.
@@ -293,8 +301,9 @@ class ConcurrentArraySnapshot {
 
 	proc this(idx : int) ref {
 		var chunkIdx = idx / ConcurrentArrayChunkSize;
-		var elemIdx = (idx % ConcurrentArrayChunkSize) + 1;
-		return chunks[chunkIdx].elems[elemIdx];
+		var elemIdx = idx % ConcurrentArrayChunkSize;
+		pragma "no copy" pragma "no auto destroy" var chunk = chunks[chunkIdx];
+		return chunk[elemIdx];
 	}
 }
 
