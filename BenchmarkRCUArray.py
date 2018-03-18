@@ -79,6 +79,13 @@ parser.add_argument('--datFile',
 	help='File to print output to.'
 )
 
+parser.add_argument('--maxLocales',
+	action='store',
+	default=maxLocales,
+	dest='maxLocales',
+	help='Maximum amount of nodes to schedule for.'
+)
+
 args = parser.parse_args()
 numTrials = int(args.numTrials)
 fileName = args.fileName

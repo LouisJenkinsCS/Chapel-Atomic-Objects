@@ -27,7 +27,7 @@ proc runRCUArray() {
 
     coforall loc in Locales  do on loc {
       coforall tid in 1..here.maxTaskPar {
-        var rng = makeRandomStream(real(64));
+        var rng = makeRandomStream(real(64), parSafe = false);
         for ix in 1 .. numOperations {
           if numWrites >= abs(rng.getNext()) {
             // Write...
