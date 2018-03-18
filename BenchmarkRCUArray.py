@@ -138,7 +138,7 @@ for locales in numLocales:
 
 			# Submit to task queue
 			executable = EBRExecutable if target == "EBR" else QSBRExecutable
-			task = Task(["../chapel/util/test/chpl_launchcmd.py", "./" + executable,  "-nl", str(locales), 
+			task = Task(["../chapel/util/test/chpl_launchcmd.py", "--walltime=01:00:00", "./" + executable,  "-nl", str(locales), 
 				"--numWrites", str(writes), "--numTrials", str(numTrials),
 				"--outputFile", outputFile, "--target", target, 
 				"--numOperations", str(numOperations)], locales)
