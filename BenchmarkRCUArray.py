@@ -134,10 +134,10 @@ for locales in numLocales:
 			outputFile = target + "-" + str(writes) + "-" + str(locales) + ".result"
 			outputFiles[target][locales][writes] = outputFile
 
-			print("Target=" + target + ", Writes=" + str(writes) + ", Locales=" + str(locales))
+			print("Target=" + target + ", Writes=" + str(writes) + ", Locales=" + str(locales) + ", OutputFile=" + outputFile)
 
 			# Submit to task queue
-			executable = EBRExecutable if target == "EBR" else QSBRExecutable
+			executable = QSBRExecutable
 			task = Task(["../chapel/util/test/chpl_launchcmd.py", "--walltime=01:00:00", "./" + executable,  "-nl", str(locales), 
 				"--numCheckpoints", str(writes), "--numTrials", str(numTrials),
 				"--outputFile", outputFile, "--target", target, 
