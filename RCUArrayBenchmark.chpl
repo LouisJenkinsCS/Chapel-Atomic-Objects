@@ -8,6 +8,7 @@ config var numCheckpoints = 0;
 config var numTrials = 4;
 config var outputFile = "";
 config var numOperations = 0;
+config var target = "";
 
 config param maxSize = 1024 * 1024;
 
