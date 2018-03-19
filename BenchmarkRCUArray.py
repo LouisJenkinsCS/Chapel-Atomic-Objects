@@ -105,10 +105,10 @@ threading.Thread(target=processWorker).start()
 print("Creating " + QSBRExecutable + "...")
 #task1 = Task(["chpl", "--fast", fileName + ".chpl", "-o", EBRExecutable], 0)
 task2 = Task(["chpl", "--fast", fileName + ".chpl", "-sConcurrentArrayUseQSBR=1", "-o", QSBRExecutable], 0)
-processQueue.put(task1)
-#processQueue.put(task2)
+#processQueue.put(task1)
+processQueue.put(task2)
 
-while not task1.isDone: # or not task2.isDone:
+while not task2.isDone: # or not task1.isDone:
 	time.sleep(1)
 
 # Execute
