@@ -186,18 +186,18 @@ for target in targetResults:
 	buf = ""
 	for loc in sorted(targetResults[target].keys()):
 		for writes in sorted(targetResults[target][loc].keys()):
-			buf += str(loc) + " " + str(writes) + " " + str(targetResults[target][loc][writes]) + "\n"
+			buf += str(loc) + " " + str(writes) + "% " + str(targetResults[target][loc][writes]) + "\n"
 	targetOutput[target] = buf
 
 # Write .dat files
-files = []
+files = {}
 for t in targetOutput.keys():
 	fname = t + "-" + datFile
 	file = open(fname, "w+")
 	for v in targetOutput[t]:
-		file.write(v);
+		file.write(v)
 	file.close()
-	files.append(fname)
+	files[t] = fname
 
 # Create GNUPlot
 gplot = open("tmp.gplot", "w+")
@@ -205,10 +205,13 @@ gplot.write("set term pngcairo\n")
 gplot.write("set output 'out.png'\n")
 gplot.write("set dgrid3d 30,30\n")
 gplot.write("set hidden3d\n")
+gplot.write("set ylabel \"write %\"\n")
+gplot.write("set xlabel \"locales\"\n")
+gplot.write("set logscale x 2\n")
 plotStr = "splot "
 plotStrArr = []
-for file in files:
-	plotStrArr.append("\"" + file + "\" using 1:2:3 with lines")
+for target in files:
+	plotStrArr.append("\"" + files[target] + "\" using 1:2:3 title \"" + target + "\" with lines")
 plotStr += ", ".join(plotStrArr)
 gplot.write(plotStr)
 gplot.close()
