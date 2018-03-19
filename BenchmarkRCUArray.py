@@ -47,7 +47,7 @@ maxLocales = 64
 numLocales = [1,2,4,8,16,32]
 numTrials = 4
 numWrites = (numpy.array(range(0,11, 2)) * 10)
-targets = ["QSBR", "EBR"]
+targets = ["QSBR"] # ["QSBR", "EBR"]
 numOperations = 1024 * 1024
 fileName = ""
 datFile = "out.dat"
@@ -101,14 +101,14 @@ threading.Thread(target=processWorker).start()
 
 
 # Compile executable
-print("Creating " + EBRExecutable + "...")
+#print("Creating " + EBRExecutable + "...")
 print("Creating " + QSBRExecutable + "...")
 task1 = Task(["chpl", "--fast", fileName + ".chpl", "-o", EBRExecutable], 0)
-task2 = Task(["chpl", "--fast", fileName + ".chpl", "-sConcurrentArrayUseQSBR=1", "-o", QSBRExecutable], 0)
+#task2 = Task(["chpl", "--fast", fileName + ".chpl", "-sConcurrentArrayUseQSBR=1", "-o", QSBRExecutable], 0)
 processQueue.put(task1)
-processQueue.put(task2)
+#processQueue.put(task2)
 
-while not task1.isDone or not task2.isDone:
+while not task1.isDone: # or not task2.isDone:
 	time.sleep(1)
 
 # Execute
@@ -139,7 +139,7 @@ for locales in numLocales:
 			# Submit to task queue
 			executable = EBRExecutable if target == "EBR" else QSBRExecutable
 			task = Task(["../chapel/util/test/chpl_launchcmd.py", "--walltime=01:00:00", "./" + executable,  "-nl", str(locales), 
-				"--numWrites", str(writes), "--numTrials", str(numTrials),
+				"--numCheckpoints", str(writes), "--numTrials", str(numTrials),
 				"--outputFile", outputFile, "--target", target, 
 				"--numOperations", str(numOperations)], locales)
 			processQueue.put(task)
@@ -205,7 +205,7 @@ gplot.write("set term pngcairo\n")
 gplot.write("set output 'out.png'\n")
 gplot.write("set dgrid3d 30,30\n")
 gplot.write("set hidden3d\n")
-gplot.write("set ylabel \"write %\"\n")
+gplot.write("set ylabel \"checkpoint %\"\n")
 gplot.write("set xlabel \"locales\"\n")
 gplot.write("set logscale x 2\n")
 plotStr = "splot "

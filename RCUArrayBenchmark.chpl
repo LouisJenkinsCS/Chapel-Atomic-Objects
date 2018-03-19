@@ -4,10 +4,9 @@ use Time;
 use BlockDist;
 use IO;
 
-config var numWrites = 0;
+config var numCheckpoints = 0;
 config var numTrials = 4;
 config var outputFile = "";
-config var target = "";
 config var numOperations = 0;
 
 config param maxSize = 1024 * 1024;
@@ -17,6 +16,7 @@ proc runRCUArray() {
   var timer = new Timer();
   var array = new ConcurrentArray(int);
 
+  // Do (X=Locales, Y=NCheckpoints, Z=Op/Sec)
   array.expand(maxSize);
 
   for i in 0 .. numTrials {
@@ -27,10 +27,10 @@ proc runRCUArray() {
       coforall tid in 1..here.maxTaskPar {
         var rng = makeRandomStream(real(64), parSafe = false);
         for ix in 1 .. numOperations {
-          if numWrites >= abs(rng.getNext()) {
-            // Write... Resizing with size '0' does not allocate any blocks
-            // but it will install a new snapshot.
-            array.expand(0);
+          if numCheckpoints >= abs(rng.getNext()) {
+            // Invoke checkpoint
+            extern proc chpl_qsbr_checkpoint();
+            chpl_qsbr_checkpoint();
           } else {
             // Read...
             var idx = ix % maxSize;
@@ -56,8 +56,6 @@ proc runRCUArray() {
 proc main() {
   if numTrials == 0 then halt("numTrials(", numTrials, ") must be non-zero...");
   else if outputFile == "" then halt("outputFile(", outputFile, ") must be set...");
-  else if target == "" then halt("target(", target, ") must be set...");
   else if numOperations == 0 then halt("numOperations(", numOperations, ") must be non-zero...");
-  
   runRCUArray();
 }
