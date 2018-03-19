@@ -26,16 +26,16 @@ proc runRCUArray() {
     coforall loc in Locales  do on loc {
       coforall tid in 1..here.maxTaskPar {
         var rng = makeRandomStream(real(64), parSafe = false);
-        for ix in 1 .. numOperations {
-          if numCheckpoints >= abs(rng.getNext()) {
+        for ix in 0 .. #numOperations {
+          // Read...
+          var idx = ix % maxSize;
+          array[idx] = idx;
+
+          if numCheckpoints > 0 && (ix % numCheckpoints) == 0 {
             // Invoke checkpoint
             extern proc chpl_qsbr_checkpoint();
             chpl_qsbr_checkpoint();
-          } else {
-            // Read...
-            var idx = ix % maxSize;
-            array[idx] = idx;
-          }
+          }           
         }
       }
     }

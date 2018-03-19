@@ -46,7 +46,7 @@ def processWorker():
 maxLocales = 64
 numLocales = [1,2,4,8,16,32]
 numTrials = 4
-numWrites = (numpy.array(range(0,11, 2)) * 10)
+numWrites = (0, 1, 10, 100, 1000, 10000)
 targets = ["QSBR"] # ["QSBR", "EBR"]
 numOperations = 1024 * 1024
 fileName = ""
