@@ -16,10 +16,8 @@ proc runRCUArray() {
   var results : [1..numTrials] real;
   var timer = new Timer();
   var array = new ConcurrentArray(int);
-  var capacity : atomic int;
 
-  array.expand(ConcurrentArrayChunkSize);
-  capacity.write(ConcurrentArrayChunkSize);
+  array.expand(maxSize);
 
   for i in 0 .. numTrials {
     timer.clear();
@@ -30,14 +28,12 @@ proc runRCUArray() {
         var rng = makeRandomStream(real(64), parSafe = false);
         for ix in 1 .. numOperations {
           if numWrites >= abs(rng.getNext()) {
-            // Write...
-            if capacity.peek() < maxSize {
-              array.expand(ConcurrentArrayChunkSize);
-              capacity.fetchAdd(ConcurrentArrayChunkSize);
-            }
+            // Write... Resizing with size '0' does not allocate any blocks
+            // but it will install a new snapshot.
+            array.expand(0);
           } else {
             // Read...
-            var idx = ix % capacity.peek();
+            var idx = ix % maxSize;
             array[idx] = idx;
           }
         }
