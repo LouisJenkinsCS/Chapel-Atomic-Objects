@@ -1,4 +1,4 @@
-use ConcurrentArray;
+use RCUArray;
 use Random;
 use Time;
 use BlockDist;
@@ -13,11 +13,11 @@ proc main() {
   var timer = new Timer();
   var results : [1..nTrials] real;
   for i in 0 .. nTrials {
-    var array = new ConcurrentArray(int);
+    var array = new RCUArray(int);
     timer.clear();
     timer.start();
-    for 1 .. nElems / ConcurrentArrayChunkSize {
-      array.expand(ConcurrentArrayChunkSize);
+    for 1 .. nElems / RCUArrayBlockSize {
+      array.expand(RCUArrayBlockSize);
     }
     timer.stop();
 
@@ -25,7 +25,7 @@ proc main() {
     if i == 0 then continue;
     results[i] = timer.elapsed();
   }
-  writeln("[Concurrent Array]: Time=", ((+ reduce results) / nTrials));
+  writeln("[RCU Array]: Time=", ((+ reduce results) / nTrials));
   csvTime += ((+ reduce results) / nTrials) : string;
 
   for i in 0 .. nTrials {
@@ -36,8 +36,8 @@ proc main() {
     timer.clear();
     timer.start();
     var sz = 0;
-    for 1 .. nElems / ConcurrentArrayChunkSize {
-      sz += ConcurrentArrayChunkSize;
+    for 1 .. nElems / RCUArrayBlockSize {
+      sz += RCUArrayBlockSize;
       dom = {1..sz};
     }
     timer.stop();

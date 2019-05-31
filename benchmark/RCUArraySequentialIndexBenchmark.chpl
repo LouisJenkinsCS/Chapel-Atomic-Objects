@@ -1,4 +1,4 @@
-use ConcurrentArray;
+use RCUArray;
 use Random;
 use Time;
 use BlockDist;
@@ -11,7 +11,7 @@ config param runSyncArray = true;
 proc main() {
   var csvTime : string;
 
-  var array = new ConcurrentArray(int);
+  var array = new RCUArray(int);
   array.expand(nElems);
   var timer = new Timer();
   var results : [1..nTrials] real;
@@ -20,9 +20,8 @@ proc main() {
     timer.start();
     coforall loc in Locales do on loc {
       coforall tid in 1..here.maxTaskPar {
-        var randStream = makeRandomStream(uint);
         for ix in 1 .. nIterationsPerTask {
-          var idx = ((randStream.getNext() % max(nElems, 1) : uint)) : int;
+          var idx = ix % nElems;
           array[idx] = idx;
         }
       }
@@ -33,7 +32,7 @@ proc main() {
     if i == 0 then continue;
     results[i] = timer.elapsed();
   }
-  writeln("[Concurrent Array]: ", "Op/Sec=", (nIterationsPerTask * here.maxTaskPar * numLocales) / ((+ reduce results) / nTrials), ", Time=", ((+ reduce results) / nTrials));
+  writeln("[RCU Array]: ", "Op/Sec=", (nIterationsPerTask * here.maxTaskPar * numLocales) / ((+ reduce results) / nTrials), ", Time=", ((+ reduce results) / nTrials));
 	csvTime += ((+ reduce results) / nTrials) : string;
 
   var space = {0..nElems};
@@ -46,9 +45,8 @@ proc main() {
     timer.start();
     coforall loc in Locales do on loc {
       coforall tid in 1..here.maxTaskPar {
-        var randStream = makeRandomStream(uint);
         for ix in 1 .. nIterationsPerTask {
-          var idx = ((randStream.getNext() % max(nElems, 1) : uint)) : int;
+          var idx = ix % nElems;
           arr[idx] = idx;
         }
       }
@@ -61,17 +59,16 @@ proc main() {
   }
   writeln("[Array]: ", "Op/Sec=", (nIterationsPerTask * here.maxTaskPar * numLocales) / ((+ reduce results) / nTrials), ", Time=", ((+ reduce results) / nTrials));
   csvTime += ", " + ((+ reduce results) / nTrials) : string;
-  
+
   if runSyncArray {
-  	for i in 0 .. nTrials {
+    for i in 0 .. nTrials {
       timer.clear();
       timer.start();
       coforall loc in Locales do on loc {
         coforall tid in 1..here.maxTaskPar {
-          var randStream = makeRandomStream(uint);
           for ix in 1 .. nIterationsPerTask {
             lock$ = true;
-            var idx = ((randStream.getNext() % max(nElems, 1) : uint)) : int;
+            var idx = ix % nElems;
             arr[idx] = idx;
             lock$;
           }
@@ -82,8 +79,8 @@ proc main() {
       // Discard first run...
       if i == 0 then continue;
       results[i] = timer.elapsed();
-    }
-    writeln("[RWSync Array]: ", "Op/Sec=", (nIterationsPerTask * here.maxTaskPar * numLocales) / ((+ reduce results) / nTrials), ", Time=", ((+ reduce results) / nTrials));
+    } 
+    writeln("[Sync Array]: ", "Op/Sec=", (nIterationsPerTask * here.maxTaskPar * numLocales) / ((+ reduce results) / nTrials), ", Time=", ((+ reduce results) / nTrials));
     csvTime += ", " + ((+ reduce results) / nTrials) : string;
   }
   

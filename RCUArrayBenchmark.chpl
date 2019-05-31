@@ -1,4 +1,4 @@
-use ConcurrentArray;
+use RCUArray;
 use Random;
 use Time;
 use BlockDist;
@@ -15,7 +15,7 @@ config param maxSize = 1024 * 1024;
 proc runRCUArray() {
   var results : [1..numTrials] real;
   var timer = new Timer();
-  var array = new ConcurrentArray(int);
+  var array = new RCUArray(int);
 
   // Do (X=Locales, Y=NCheckpoints, Z=Op/Sec)
   array.expand(maxSize);
@@ -31,12 +31,6 @@ proc runRCUArray() {
           // Read...
           var idx = ix % maxSize;
           array[idx] = idx;
-
-          if numCheckpoints > 0 && (ix % numCheckpoints) == 0 {
-            // Invoke checkpoint
-            extern proc chpl_qsbr_checkpoint();
-            chpl_qsbr_checkpoint();
-          }           
         }
       }
     }
