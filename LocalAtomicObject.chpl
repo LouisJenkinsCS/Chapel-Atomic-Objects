@@ -62,7 +62,6 @@ module LocalAtomics {
     }
 
     static inline void read128bit(void *srcvp, void *dstvp) {
-      printf("(%lx, %lx)\n", srcvp, dstvp);
       uint128_t *src = srcvp;
       uint128_t with_val = *src;
       uint128_t __attribute__ ((aligned (16))) cmp_val;
@@ -169,7 +168,6 @@ module LocalAtomics {
     proc readABA() : ABA(objType) {
       var dest : ABA(objType);
       var src = atomicVar;
-      writeln((c_ptrTo(src), c_ptrTo(dest)));
       read128bit(c_ptrTo(src), c_ptrTo(dest));
       return dest;
     }
