@@ -185,12 +185,12 @@ module LocalAtomics {
     }
 
     proc read() : objType {
-      return __primitive("cast", objType, atomicVar.getObject());
+      return __primitive("cast", objType, atomicVar[0].getObject());
     }
 
     proc compareExchange(expectedObj : objType, newObj : objType) : bool {
       localityCheck(expectedObj, newObj);
-      return atomicVar._ABA_ptr.compareExchange(getAddr(expectedObj), getAddr(newObj));
+      return atomicVar[0]._ABA_ptr.compareExchange(getAddr(expectedObj), getAddr(newObj));
     }
 
     proc compareExchangeABA(expectedObj : ABA(objType), newObj : objType) : bool {
@@ -206,7 +206,7 @@ module LocalAtomics {
 
     proc write(newObj:objType) {
       localityCheck(newObj);
-      atomicVar._ABA_ptr.write(getAddr(newObj));
+      atomicVar[0]._ABA_ptr.write(getAddr(newObj));
     }
 
     proc write(newObj:ABA(objType)) {
@@ -218,7 +218,7 @@ module LocalAtomics {
     }
 
     proc writeABA(newObj: objType) {
-      writeABA(new ABA(objType, getAddr(objType), atomicVar.getABACounter() + 1));
+      writeABA(new ABA(objType, getAddr(objType), atomicVar[0].getABACounter() + 1));
     }
 
     inline proc exchange(newObj:objType) {
