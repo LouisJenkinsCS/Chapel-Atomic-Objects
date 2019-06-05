@@ -10,6 +10,7 @@ module LocalAtomics {
   extern {
     #include <stdint.h>
     #include <stdio.h>
+    #include <stdlib.h>
 
     struct uint128 {
       uint64_t lo;
@@ -19,9 +20,8 @@ module LocalAtomics {
     typedef struct uint128 uint128_t;
     static inline int cas128bit(void *srcvp, void *cmpvp, void *withvp) {
       uint128_t __attribute__ ((aligned (16))) cmp_val = * (uint128_t *) cmpvp;
-      uint128_t __attribute__ ((aligned (16))) src_val = * (uint128_t *) srcvp;
-      uint128_t __attribute__ ((aligned (16))) with_val = * (uint128_t *) withvp;
-      uint128_t *src = &src_val;
+      uint128_t __attribute__ ((aligned (16))) with_val = * (uint128_t *) withvp;      
+      uint128_t *src = srcvp;
       uint128_t *cmp = &cmp_val;
       uint128_t *with = &with_val;
       char result;
@@ -37,15 +37,14 @@ module LocalAtomics {
           "r" (src),
           "m" (result)
           : "cc", "memory");
-
+      *(uint128_t *) cmpvp = cmp_val;
       return result;
     }
 
     static inline void write128bit(void *srcvp, void *valvp) {
-      uint128_t __attribute__ ((aligned (16))) src_val = * (uint128_t *) srcvp;
       uint128_t __attribute__ ((aligned (16))) with_val = * (uint128_t *) valvp;
-      uint128_t __attribute__ ((aligned (16))) cmp_val = src_val;
-      uint128_t *src = &src_val;
+      uint128_t __attribute__ ((aligned (16))) cmp_val = * (uint128_t *) srcvp;
+      uint128_t *src = srcvp;
       uint128_t *cmp = &cmp_val;
       uint128_t *with = &with_val;
       char successful = 0;
@@ -69,7 +68,7 @@ module LocalAtomics {
       uint128_t __attribute__ ((aligned (16))) src_val = * (uint128_t *) srcvp;
       uint128_t __attribute__ ((aligned (16))) cmp_val = src_val;
       uint128_t __attribute__ ((aligned (16))) with_val = src_val;
-      uint128_t *src = &src_val;
+      uint128_t *src = srcvp;
       uint128_t *cmp = &cmp_val;
       uint128_t *with = &with_val;
       char result;
@@ -142,19 +141,28 @@ module LocalAtomics {
 
   record LocalAtomicObject {
     type objType;
-    var atomicVar : ABA(objType);
+    var atomicVar : c_ptr(ABA(objType));
 
     proc init(type objType) {
       if !isUnmanagedClass(objType) then compilerError("LocalAtomicObject must take a 'unmanaged' type, not ", objType : string);
       this.objType = objType;
+      this.complete();
+      var ptr : c_void_ptr;
+      posix_memalign(c_ptrTo(ptr), 16, c_sizeof(ABA(objType)));
+      this.atomicVar = ptr;
+      c_memset(atomicVar, 0, c_sizeof(ABA(objType)));
     }
 
     proc init(type objType, defaultValue : objType) {
       if !isUnmanagedClass(objType) then compilerError("LocalAtomicObject must take a 'unmanaged' type, not ", objType : string);
       this.objType = objType;
       this.complete();
-      localityCheck(defaultValue);      
-      this.atomicVar._ABA_ptr.write(getAddr(defaultValue));
+      localityCheck(defaultValue);
+      var ptr : c_void_ptr;
+      posix_memalign(c_ptrTo(ptr), 16, c_sizeof(ABA(objType)));
+      this.atomicVar = ptr;
+      c_memset(atomicVar, 0, c_sizeof(ABA(objType)));      
+      this.atomicVar[0]._ABA_ptr.write(getAddr(defaultValue));
     }
 
     inline proc getAddrAndLocality(obj : objType) : (locale, uint(64)) {
@@ -172,8 +180,7 @@ module LocalAtomics {
 
     proc readABA() : ABA(objType) {
       var dest : ABA(objType);
-      var src = atomicVar;
-      read128bit(c_ptrTo(src), c_ptrTo(dest));
+      read128bit(atomicVar, c_ptrTo(dest));
       return dest;
     }
 
@@ -189,8 +196,8 @@ module LocalAtomics {
     proc compareExchangeABA(expectedObj : ABA(objType), newObj : objType) : bool {
       localityCheck(newObj);
       var cmp = expectedObj;
-      var val = new ABA(objType, getAddr(newObj), atomicVar.getABACounter() + 1);
-      return cas128bit(c_ptrTo(atomicVar), c_ptrTo(cmp), c_ptrTo(val)) : bool;
+      var val = new ABA(objType, getAddr(newObj), atomicVar[0].getABACounter() + 1);
+      return cas128bit(atomicVar, c_ptrTo(cmp), c_ptrTo(val)) : bool;
     }
     
     proc compareExchangeABA(expectedObj : ABA(objType), newObj : ABA(objType)) : bool {
@@ -207,7 +214,7 @@ module LocalAtomics {
     }
     
     proc writeABA(newObj: ABA(objType)) {
-      write128bit(c_ptrTo(atomicVar), c_ptrTo(newObj));
+      write128bit(atomicVar, c_ptrTo(newObj));
     }
 
     proc writeABA(newObj: objType) {
@@ -232,6 +239,10 @@ module LocalAtomics {
     inline proc exchange(newObj) {
       compilerError("Incompatible object type in LocalAtomicObject.exchange: ",
           newObj.type : string);
+    }
+
+    proc readWriteThis(f) {
+      f <~> atomicVar[0];
     }
   }
 
