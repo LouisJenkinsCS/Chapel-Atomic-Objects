@@ -18,9 +18,12 @@ module LocalAtomics {
 
     typedef struct uint128 uint128_t;
     static inline int cas128bit(void *srcvp, void *cmpvp, void *withvp) {
-      uint128_t *src = srcvp;
-      uint128_t *cmp = cmpvp;
-      uint128_t *with = withvp;
+      uint128_t __attribute__ ((aligned (16))) cmp_val = * (uint128_t *) cmpvp;
+      uint128_t __attribute__ ((aligned (16))) src_val = * (uint128_t *) srcvp;
+      uint128_t __attribute__ ((aligned (16))) with_val = * (uint128_t *) withvp;
+      uint128_t *src = &src_val;
+      uint128_t *cmp = &cmp_val;
+      uint128_t *with = &with_val;
       char result;
 
       __asm__ __volatile__ ("lock; cmpxchg16b (%6);"
@@ -39,9 +42,10 @@ module LocalAtomics {
     }
 
     static inline void write128bit(void *srcvp, void *valvp) {
-      uint128_t *src = srcvp;
-      uint128_t with_val = *(uint128_t *)valvp;
-      uint128_t __attribute__ ((aligned (16))) cmp_val = *src;
+      uint128_t __attribute__ ((aligned (16))) src_val = * (uint128_t *) srcvp;
+      uint128_t __attribute__ ((aligned (16))) with_val = * (uint128_t *) valvp;
+      uint128_t __attribute__ ((aligned (16))) cmp_val = src_val;
+      uint128_t *src = &src_val;
       uint128_t *cmp = &cmp_val;
       uint128_t *with = &with_val;
       char successful = 0;
@@ -62,9 +66,10 @@ module LocalAtomics {
     }
 
     static inline void read128bit(void *srcvp, void *dstvp) {
-      uint128_t *src = srcvp;
-      uint128_t with_val = *src;
-      uint128_t __attribute__ ((aligned (16))) cmp_val;
+      uint128_t __attribute__ ((aligned (16))) src_val = * (uint128_t *) srcvp;
+      uint128_t __attribute__ ((aligned (16))) cmp_val = src_val;
+      uint128_t __attribute__ ((aligned (16))) with_val = src_val;
+      uint128_t *src = &src_val;
       uint128_t *cmp = &cmp_val;
       uint128_t *with = &with_val;
       char result;
