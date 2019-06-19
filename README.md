@@ -58,6 +58,8 @@ memory, you can make them on remote memory too. There are two ways in which thes
 	patterns, such as the lock-free 'CAS Retry loop' where the cost of retrying is too expensive, hence ruling out any lock-free
 	algorithms and methodologies.
 
+![Performance](https://user-images.githubusercontent.com/4269990/59807652-b1b5f400-92ad-11e9-851a-e314f31a257c.png)
+
 ## Atomic Operations on 'Wide' Pointers
 
 As memory can be accessed transparently from the user's perspective, it must be kept track of by the runtime. Hence, to determine
